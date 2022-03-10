@@ -787,6 +787,27 @@ var builtInNumFmtFunc = map[int]func(v string, format string) string{
 	47: format,
 	48: formatToE,
 	49: format,
+
+	// Maptable patch
+	27: formatToDate,
+	28: formatToDate,
+	29: formatToDate,
+	30: formatToDate,
+	31: formatToDate,
+	32: formatToDate,
+	33: formatToDate,
+	34: formatToDate,
+	35: formatToDate,
+	36: formatToDate,
+	50: formatToDate,
+	51: formatToDate,
+	52: formatToDate,
+	53: formatToDate,
+	54: formatToDate,
+	55: formatToDate,
+	56: formatToDate,
+	57: formatToDate,
+	58: formatToDate,
 }
 
 // validType defined the list of valid validation types.
@@ -924,6 +945,14 @@ func formatToE(v string, format string) string {
 		return v
 	}
 	return fmt.Sprintf("%.2E", f)
+}
+
+func formatToDate(v string, _ string) string {
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return v
+	}
+	return timeFromExcelTime(f, false).Format("2006-01-02 15:04:05")
 }
 
 // stylesReader provides a function to get the pointer to the structure after

@@ -12,3 +12,5 @@ test/excelize-*
 *.out
 *.test
 .idea
+
+vendor/

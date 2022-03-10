@@ -317,8 +317,7 @@ func (nf *numberFormat) positiveHandler() (result string) {
 	nf.t, nf.hours, nf.seconds = timeFromExcelTime(nf.number, false), false, false
 	for i, token := range nf.section[nf.sectionIdx].Items {
 		if inStrSlice(supportedTokenTypes, token.TType, true) == -1 || token.TType == nfp.TokenTypeGeneral {
-			result = nf.value
-			return
+			continue
 		}
 		if token.TType == nfp.TokenTypeCurrencyLanguage {
 			if err := nf.currencyLanguageHandler(i, token); err != nil {
@@ -338,6 +337,9 @@ func (nf *numberFormat) positiveHandler() (result string) {
 		}
 	}
 	result = nf.result
+	if result == "" {
+		result = nf.value
+	}
 	return
 }
 
