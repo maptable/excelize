@@ -128,7 +128,7 @@ type StandardEncryptionVerifier struct {
 	EncryptedVerifierHash []byte
 }
 
-// Decrypt API decrypt the CFB file format with ECMA-376 agile encryption and
+// Decrypt API decrypts the CFB file format with ECMA-376 agile encryption and
 // standard encryption. Support cryptographic algorithm: MD4, MD5, RIPEMD-160,
 // SHA1, SHA256, SHA384 and SHA512 currently.
 func Decrypt(raw []byte, opt *Options) (packageBuf []byte, err error) {
@@ -629,7 +629,7 @@ func genISOPasswdHash(passwd, hashAlgorithm, salt string, spinCount int) (hashVa
 		err = ErrPasswordLengthInvalid
 		return
 	}
-	hash, ok := map[string]string{
+	algorithmName, ok := map[string]string{
 		"MD4":     "md4",
 		"MD5":     "md5",
 		"SHA-1":   "sha1",
@@ -653,11 +653,11 @@ func genISOPasswdHash(passwd, hashAlgorithm, salt string, spinCount int) (hashVa
 	passwordBuffer, _ := encoder.Bytes([]byte(passwd))
 	b.Write(passwordBuffer)
 	// Generate the initial hash.
-	key := hashing(hash, b.Bytes())
+	key := hashing(algorithmName, b.Bytes())
 	// Now regenerate until spin count.
 	for i := 0; i < spinCount; i++ {
 		iterator := createUInt32LEBuffer(i, 4)
-		key = hashing(hash, key, iterator)
+		key = hashing(algorithmName, key, iterator)
 	}
 	hashValue, saltValue = base64.StdEncoding.EncodeToString(key), base64.StdEncoding.EncodeToString(s)
 	return

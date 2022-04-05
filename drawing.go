@@ -514,7 +514,7 @@ func (f *File) drawBaseChart(formatSet *formatChart) *cPlotArea {
 // doughnut chart by given format sets.
 func (f *File) drawDoughnutChart(formatSet *formatChart) *cPlotArea {
 	holeSize := 75
-	if formatSet.HoleSize > 0 && formatSet.HoleSize <= 90{
+	if formatSet.HoleSize > 0 && formatSet.HoleSize <= 90 {
 		holeSize = formatSet.HoleSize
 	}
 
@@ -740,7 +740,7 @@ func (f *File) drawChartShape(formatSet *formatChart) *attrValString {
 // drawChartSeries provides a function to draw the c:ser element by given
 // format sets.
 func (f *File) drawChartSeries(formatSet *formatChart) *[]cSer {
-	ser := []cSer{}
+	var ser []cSer
 	for k := range formatSet.Series {
 		ser = append(ser, cSer{
 			IDx:   &attrValInt{Val: intPtr(k + formatSet.order)},

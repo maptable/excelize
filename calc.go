@@ -69,7 +69,7 @@ const (
 	searchModeDescBinary    = -2
 
 	maxFinancialIterations = 128
-	financialPercision     = 1.0e-08
+	financialPrecision     = 1.0e-08
 	// Date and time format regular expressions
 	monthRe    = `((jan|january)|(feb|february)|(mar|march)|(apr|april)|(may)|(jun|june)|(jul|july)|(aug|august)|(sep|september)|(oct|october)|(nov|november)|(dec|december))`
 	df1        = `(([0-9])+)/(([0-9])+)/(([0-9])+)`
@@ -282,11 +282,11 @@ func (fa formulaArg) ToBool() formulaArg {
 func (fa formulaArg) ToList() []formulaArg {
 	switch fa.Type {
 	case ArgMatrix:
-		list := []formulaArg{}
+		var args []formulaArg
 		for _, row := range fa.Matrix {
-			list = append(list, row...)
+			args = append(args, row...)
 		}
-		return list
+		return args
 	case ArgList:
 		return fa.List
 	case ArgNumber, ArgString, ArgError, ArgUnknown:
@@ -328,16 +328,23 @@ type formulaFuncs struct {
 //    AVERAGE
 //    AVERAGEA
 //    AVERAGEIF
+//    AVERAGEIFS
 //    BASE
 //    BESSELI
 //    BESSELJ
 //    BESSELK
 //    BESSELY
+//    BETADIST
+//    BETA.DIST
 //    BETAINV
 //    BETA.INV
 //    BIN2DEC
 //    BIN2HEX
 //    BIN2OCT
+//    BINOMDIST
+//    BINOM.DIST
+//    BINOM.DIST.RANGE
+//    BINOM.INV
 //    BITAND
 //    BITLSHIFT
 //    BITOR
@@ -348,6 +355,13 @@ type formulaFuncs struct {
 //    CEILING.PRECISE
 //    CHAR
 //    CHIDIST
+//    CHIINV
+//    CHITEST
+//    CHISQ.DIST
+//    CHISQ.DIST.RT
+//    CHISQ.INV
+//    CHISQ.INV.RT
+//    CHISQ.TEST
 //    CHOOSE
 //    CLEAN
 //    CODE
@@ -378,6 +392,7 @@ type formulaFuncs struct {
 //    COUPPCD
 //    COVAR
 //    COVARIANCE.P
+//    CRITBINOM
 //    CSC
 //    CSCH
 //    CUMIPMT
@@ -415,8 +430,12 @@ type formulaFuncs struct {
 //    FACT
 //    FACTDOUBLE
 //    FALSE
+//    F.DIST
+//    F.DIST.RT
+//    FDIST
 //    FIND
 //    FINDB
+//    F.INV
 //    F.INV.RT
 //    FINV
 //    FISHER
@@ -426,10 +445,18 @@ type formulaFuncs struct {
 //    FLOOR.MATH
 //    FLOOR.PRECISE
 //    FORMULATEXT
+//    F.TEST
+//    FTEST
 //    FV
 //    FVSCHEDULE
 //    GAMMA
+//    GAMMA.DIST
+//    GAMMADIST
+//    GAMMA.INV
+//    GAMMAINV
 //    GAMMALN
+//    GAMMALN.PRECISE
+//    GAUSS
 //    GCD
 //    GEOMEAN
 //    GESTEP
@@ -439,6 +466,8 @@ type formulaFuncs struct {
 //    HEX2OCT
 //    HLOOKUP
 //    HOUR
+//    HYPGEOM.DIST
+//    HYPGEOMDIST
 //    IF
 //    IFERROR
 //    IFNA
@@ -499,6 +528,10 @@ type formulaFuncs struct {
 //    LN
 //    LOG
 //    LOG10
+//    LOGINV
+//    LOGNORM.DIST
+//    LOGNORMDIST
+//    LOGNORM.INV
 //    LOOKUP
 //    LOWER
 //    MATCH
@@ -522,6 +555,8 @@ type formulaFuncs struct {
 //    MUNIT
 //    N
 //    NA
+//    NEGBINOM.DIST
+//    NEGBINOMDIST
 //    NOMINAL
 //    NORM.DIST
 //    NORMDIST
@@ -588,6 +623,7 @@ type formulaFuncs struct {
 //    SEC
 //    SECH
 //    SECOND
+//    SERIESSUM
 //    SHEET
 //    SHEETS
 //    SIGN
@@ -607,6 +643,8 @@ type formulaFuncs struct {
 //    SUBSTITUTE
 //    SUM
 //    SUMIF
+//    SUMIFS
+//    SUMPRODUCT
 //    SUMSQ
 //    SUMX2MY2
 //    SUMX2PY2
@@ -619,15 +657,23 @@ type formulaFuncs struct {
 //    TBILLEQ
 //    TBILLPRICE
 //    TBILLYIELD
+//    T.DIST
+//    T.DIST.2T
+//    T.DIST.RT
+//    TDIST
 //    TEXTJOIN
 //    TIME
 //    TIMEVALUE
+//    T.INV
+//    T.INV.2T
+//    TINV
 //    TODAY
 //    TRANSPOSE
 //    TRIM
 //    TRIMMEAN
 //    TRUE
 //    TRUNC
+//    TTEST
 //    TYPE
 //    UNICHAR
 //    UNICODE
@@ -674,7 +720,7 @@ func (f *File) CalcCellValue(sheet, cell string) (result string, err error) {
 	}
 	result = token.TValue
 	isNum, precision := isNumeric(result)
-	if isNum && precision > 15 {
+	if isNum && (precision > 15 || precision == 0) {
 		num := roundPrecision(result, -1)
 		result = strings.ToUpper(num)
 	}
@@ -1218,30 +1264,9 @@ func isOperatorPrefixToken(token efp.Token) bool {
 	return (token.TValue == "-" && token.TType == efp.TokenTypeOperatorPrefix) || (ok && token.TType == efp.TokenTypeOperatorInfix)
 }
 
-// isOperand determine if the token is parse operand perand.
+// isOperand determine if the token is parse operand.
 func isOperand(token efp.Token) bool {
 	return token.TType == efp.TokenTypeOperand && (token.TSubType == efp.TokenSubTypeNumber || token.TSubType == efp.TokenSubTypeText)
-}
-
-// getDefinedNameRefTo convert defined name to reference range.
-func (f *File) getDefinedNameRefTo(definedNameName string, currentSheet string) (refTo string) {
-	var workbookRefTo, worksheetRefTo string
-	for _, definedName := range f.GetDefinedName() {
-		if definedName.Name == definedNameName {
-			// worksheet scope takes precedence over scope workbook when both definedNames exist
-			if definedName.Scope == "Workbook" {
-				workbookRefTo = definedName.RefersTo
-			}
-			if definedName.Scope == currentSheet {
-				worksheetRefTo = definedName.RefersTo
-			}
-		}
-	}
-	refTo = workbookRefTo
-	if worksheetRefTo != "" {
-		refTo = worksheetRefTo
-	}
-	return
 }
 
 // parseToken parse basic arithmetic operator priority and evaluate based on
@@ -1431,7 +1456,7 @@ func (f *File) rangeResolver(cellRefs, cellRanges *list.List) (arg formulaArg, e
 	if cellRanges.Len() > 0 {
 		arg.Type = ArgMatrix
 		for row := valueRange[0]; row <= valueRange[1]; row++ {
-			matrixRow := []formulaArg{}
+			var matrixRow []formulaArg
 			for col := valueRange[2]; col <= valueRange[3]; col++ {
 				var cell, value string
 				if cell, err = CoordinatesToCellName(col, row); err != nil {
@@ -1608,10 +1633,11 @@ func (fn *formulaFuncs) bassel(argsList *list.List, modfied bool) formulaArg {
 		n4++
 		n2 *= n4
 		t = result
+		r := x1 / n1 / n2
 		if modfied || add {
-			result += (x1 / n1 / n2)
+			result += r
 		} else {
-			result -= (x1 / n1 / n2)
+			result -= r
 		}
 		max--
 		add = !add
@@ -1958,9 +1984,9 @@ func (fn *formulaFuncs) COMPLEX(argsList *list.List) formulaArg {
 	if argsList.Len() > 3 {
 		return newErrorFormulaArg(formulaErrorVALUE, "COMPLEX allows at most 3 arguments")
 	}
-	real, i, suffix := argsList.Front().Value.(formulaArg).ToNumber(), argsList.Front().Next().Value.(formulaArg).ToNumber(), "i"
-	if real.Type != ArgNumber {
-		return real
+	realNum, i, suffix := argsList.Front().Value.(formulaArg).ToNumber(), argsList.Front().Next().Value.(formulaArg).ToNumber(), "i"
+	if realNum.Type != ArgNumber {
+		return realNum
 	}
 	if i.Type != ArgNumber {
 		return i
@@ -1970,13 +1996,27 @@ func (fn *formulaFuncs) COMPLEX(argsList *list.List) formulaArg {
 			return newErrorFormulaArg(formulaErrorVALUE, formulaErrorVALUE)
 		}
 	}
-	return newStringFormulaArg(cmplx2str(fmt.Sprint(complex(real.Number, i.Number)), suffix))
+	return newStringFormulaArg(cmplx2str(complex(realNum.Number, i.Number), suffix))
 }
 
 // cmplx2str replace complex number string characters.
-func cmplx2str(c, suffix string) string {
-	if c == "(0+0i)" || c == "(-0+0i)" || c == "(0-0i)" || c == "(-0-0i)" {
-		return "0"
+func cmplx2str(num complex128, suffix string) string {
+	c := fmt.Sprint(num)
+	realPart, imagPart := fmt.Sprint(real(num)), fmt.Sprint(imag(num))
+	isNum, i := isNumeric(realPart)
+	if isNum && i > 15 {
+		realPart = roundPrecision(realPart, -1)
+	}
+	isNum, i = isNumeric(imagPart)
+	if isNum && i > 15 {
+		imagPart = roundPrecision(imagPart, -1)
+	}
+	c = realPart
+	if imag(num) > 0 {
+		c += "+"
+	}
+	if imag(num) != 0 {
+		c += imagPart + "i"
 	}
 	c = strings.TrimPrefix(c, "(")
 	c = strings.TrimPrefix(c, "+0+")
@@ -2191,7 +2231,7 @@ func (fn *formulaFuncs) ERFC(argsList *list.List) formulaArg {
 	return fn.erfc("ERFC", argsList)
 }
 
-// ERFC.PRECISE function calculates the Complementary Error Function,
+// ERFCdotPRECISE function calculates the Complementary Error Function,
 // integrated between a supplied lower limit and infinity. The syntax of the
 // function is:
 //
@@ -2310,7 +2350,8 @@ func (fn *formulaFuncs) IMABS(argsList *list.List) formulaArg {
 	if argsList.Len() != 1 {
 		return newErrorFormulaArg(formulaErrorVALUE, "IMABS requires 1 argument")
 	}
-	inumber, err := strconv.ParseComplex(str2cmplx(argsList.Front().Value.(formulaArg).Value()), 128)
+	value := argsList.Front().Value.(formulaArg).Value()
+	inumber, err := strconv.ParseComplex(str2cmplx(value), 128)
 	if err != nil {
 		return newErrorFormulaArg(formulaErrorNUM, err.Error())
 	}
@@ -2326,7 +2367,8 @@ func (fn *formulaFuncs) IMAGINARY(argsList *list.List) formulaArg {
 	if argsList.Len() != 1 {
 		return newErrorFormulaArg(formulaErrorVALUE, "IMAGINARY requires 1 argument")
 	}
-	inumber, err := strconv.ParseComplex(str2cmplx(argsList.Front().Value.(formulaArg).Value()), 128)
+	value := argsList.Front().Value.(formulaArg).Value()
+	inumber, err := strconv.ParseComplex(str2cmplx(value), 128)
 	if err != nil {
 		return newErrorFormulaArg(formulaErrorNUM, err.Error())
 	}
@@ -2342,7 +2384,8 @@ func (fn *formulaFuncs) IMARGUMENT(argsList *list.List) formulaArg {
 	if argsList.Len() != 1 {
 		return newErrorFormulaArg(formulaErrorVALUE, "IMARGUMENT requires 1 argument")
 	}
-	inumber, err := strconv.ParseComplex(str2cmplx(argsList.Front().Value.(formulaArg).Value()), 128)
+	value := argsList.Front().Value.(formulaArg).Value()
+	inumber, err := strconv.ParseComplex(str2cmplx(value), 128)
 	if err != nil {
 		return newErrorFormulaArg(formulaErrorNUM, err.Error())
 	}
@@ -2358,11 +2401,12 @@ func (fn *formulaFuncs) IMCONJUGATE(argsList *list.List) formulaArg {
 	if argsList.Len() != 1 {
 		return newErrorFormulaArg(formulaErrorVALUE, "IMCONJUGATE requires 1 argument")
 	}
-	inumber, err := strconv.ParseComplex(str2cmplx(argsList.Front().Value.(formulaArg).Value()), 128)
+	value := argsList.Front().Value.(formulaArg).Value()
+	inumber, err := strconv.ParseComplex(str2cmplx(value), 128)
 	if err != nil {
 		return newErrorFormulaArg(formulaErrorNUM, err.Error())
 	}
-	return newStringFormulaArg(cmplx2str(fmt.Sprint(cmplx.Conj(inumber)), "i"))
+	return newStringFormulaArg(cmplx2str(cmplx.Conj(inumber), value[len(value)-1:]))
 }
 
 // IMCOS function returns the cosine of a supplied complex number. The syntax
@@ -2374,11 +2418,12 @@ func (fn *formulaFuncs) IMCOS(argsList *list.List) formulaArg {
 	if argsList.Len() != 1 {
 		return newErrorFormulaArg(formulaErrorVALUE, "IMCOS requires 1 argument")
 	}
-	inumber, err := strconv.ParseComplex(str2cmplx(argsList.Front().Value.(formulaArg).Value()), 128)
+	value := argsList.Front().Value.(formulaArg).Value()
+	inumber, err := strconv.ParseComplex(str2cmplx(value), 128)
 	if err != nil {
 		return newErrorFormulaArg(formulaErrorNUM, err.Error())
 	}
-	return newStringFormulaArg(cmplx2str(fmt.Sprint(cmplx.Cos(inumber)), "i"))
+	return newStringFormulaArg(cmplx2str(cmplx.Cos(inumber), value[len(value)-1:]))
 }
 
 // IMCOSH function returns the hyperbolic cosine of a supplied complex number. The syntax
@@ -2390,11 +2435,12 @@ func (fn *formulaFuncs) IMCOSH(argsList *list.List) formulaArg {
 	if argsList.Len() != 1 {
 		return newErrorFormulaArg(formulaErrorVALUE, "IMCOSH requires 1 argument")
 	}
-	inumber, err := strconv.ParseComplex(str2cmplx(argsList.Front().Value.(formulaArg).Value()), 128)
+	value := argsList.Front().Value.(formulaArg).Value()
+	inumber, err := strconv.ParseComplex(str2cmplx(value), 128)
 	if err != nil {
 		return newErrorFormulaArg(formulaErrorNUM, err.Error())
 	}
-	return newStringFormulaArg(cmplx2str(fmt.Sprint(cmplx.Cosh(inumber)), "i"))
+	return newStringFormulaArg(cmplx2str(cmplx.Cosh(inumber), value[len(value)-1:]))
 }
 
 // IMCOT function returns the cotangent of a supplied complex number. The syntax
@@ -2406,11 +2452,12 @@ func (fn *formulaFuncs) IMCOT(argsList *list.List) formulaArg {
 	if argsList.Len() != 1 {
 		return newErrorFormulaArg(formulaErrorVALUE, "IMCOT requires 1 argument")
 	}
-	inumber, err := strconv.ParseComplex(str2cmplx(argsList.Front().Value.(formulaArg).Value()), 128)
+	value := argsList.Front().Value.(formulaArg).Value()
+	inumber, err := strconv.ParseComplex(str2cmplx(value), 128)
 	if err != nil {
 		return newErrorFormulaArg(formulaErrorNUM, err.Error())
 	}
-	return newStringFormulaArg(cmplx2str(fmt.Sprint(cmplx.Cot(inumber)), "i"))
+	return newStringFormulaArg(cmplx2str(cmplx.Cot(inumber), value[len(value)-1:]))
 }
 
 // IMCSC function returns the cosecant of a supplied complex number. The syntax
@@ -2422,7 +2469,8 @@ func (fn *formulaFuncs) IMCSC(argsList *list.List) formulaArg {
 	if argsList.Len() != 1 {
 		return newErrorFormulaArg(formulaErrorVALUE, "IMCSC requires 1 argument")
 	}
-	inumber, err := strconv.ParseComplex(str2cmplx(argsList.Front().Value.(formulaArg).Value()), 128)
+	value := argsList.Front().Value.(formulaArg).Value()
+	inumber, err := strconv.ParseComplex(str2cmplx(value), 128)
 	if err != nil {
 		return newErrorFormulaArg(formulaErrorNUM, err.Error())
 	}
@@ -2430,7 +2478,7 @@ func (fn *formulaFuncs) IMCSC(argsList *list.List) formulaArg {
 	if cmplx.IsInf(num) {
 		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 	}
-	return newStringFormulaArg(cmplx2str(fmt.Sprint(num), "i"))
+	return newStringFormulaArg(cmplx2str(num, value[len(value)-1:]))
 }
 
 // IMCSCH function returns the hyperbolic cosecant of a supplied complex
@@ -2442,7 +2490,8 @@ func (fn *formulaFuncs) IMCSCH(argsList *list.List) formulaArg {
 	if argsList.Len() != 1 {
 		return newErrorFormulaArg(formulaErrorVALUE, "IMCSCH requires 1 argument")
 	}
-	inumber, err := strconv.ParseComplex(str2cmplx(argsList.Front().Value.(formulaArg).Value()), 128)
+	value := argsList.Front().Value.(formulaArg).Value()
+	inumber, err := strconv.ParseComplex(str2cmplx(value), 128)
 	if err != nil {
 		return newErrorFormulaArg(formulaErrorNUM, err.Error())
 	}
@@ -2450,7 +2499,7 @@ func (fn *formulaFuncs) IMCSCH(argsList *list.List) formulaArg {
 	if cmplx.IsInf(num) {
 		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 	}
-	return newStringFormulaArg(cmplx2str(fmt.Sprint(num), "i"))
+	return newStringFormulaArg(cmplx2str(num, value[len(value)-1:]))
 }
 
 // IMDIV function calculates the quotient of two complex numbers (i.e. divides
@@ -2462,7 +2511,8 @@ func (fn *formulaFuncs) IMDIV(argsList *list.List) formulaArg {
 	if argsList.Len() != 2 {
 		return newErrorFormulaArg(formulaErrorVALUE, "IMDIV requires 2 arguments")
 	}
-	inumber1, err := strconv.ParseComplex(str2cmplx(argsList.Front().Value.(formulaArg).Value()), 128)
+	value := argsList.Front().Value.(formulaArg).Value()
+	inumber1, err := strconv.ParseComplex(str2cmplx(value), 128)
 	if err != nil {
 		return newErrorFormulaArg(formulaErrorNUM, err.Error())
 	}
@@ -2474,7 +2524,7 @@ func (fn *formulaFuncs) IMDIV(argsList *list.List) formulaArg {
 	if cmplx.IsInf(num) {
 		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 	}
-	return newStringFormulaArg(cmplx2str(fmt.Sprint(num), "i"))
+	return newStringFormulaArg(cmplx2str(num, value[len(value)-1:]))
 }
 
 // IMEXP function returns the exponential of a supplied complex number. The
@@ -2486,11 +2536,12 @@ func (fn *formulaFuncs) IMEXP(argsList *list.List) formulaArg {
 	if argsList.Len() != 1 {
 		return newErrorFormulaArg(formulaErrorVALUE, "IMEXP requires 1 argument")
 	}
-	inumber, err := strconv.ParseComplex(str2cmplx(argsList.Front().Value.(formulaArg).Value()), 128)
+	value := argsList.Front().Value.(formulaArg).Value()
+	inumber, err := strconv.ParseComplex(str2cmplx(value), 128)
 	if err != nil {
 		return newErrorFormulaArg(formulaErrorNUM, err.Error())
 	}
-	return newStringFormulaArg(cmplx2str(fmt.Sprint(cmplx.Exp(inumber)), "i"))
+	return newStringFormulaArg(cmplx2str(cmplx.Exp(inumber), value[len(value)-1:]))
 }
 
 // IMLN function returns the natural logarithm of a supplied complex number.
@@ -2502,7 +2553,8 @@ func (fn *formulaFuncs) IMLN(argsList *list.List) formulaArg {
 	if argsList.Len() != 1 {
 		return newErrorFormulaArg(formulaErrorVALUE, "IMLN requires 1 argument")
 	}
-	inumber, err := strconv.ParseComplex(str2cmplx(argsList.Front().Value.(formulaArg).Value()), 128)
+	value := argsList.Front().Value.(formulaArg).Value()
+	inumber, err := strconv.ParseComplex(str2cmplx(value), 128)
 	if err != nil {
 		return newErrorFormulaArg(formulaErrorNUM, err.Error())
 	}
@@ -2510,7 +2562,7 @@ func (fn *formulaFuncs) IMLN(argsList *list.List) formulaArg {
 	if cmplx.IsInf(num) {
 		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 	}
-	return newStringFormulaArg(cmplx2str(fmt.Sprint(num), "i"))
+	return newStringFormulaArg(cmplx2str(num, value[len(value)-1:]))
 }
 
 // IMLOG10 function returns the common (base 10) logarithm of a supplied
@@ -2522,7 +2574,8 @@ func (fn *formulaFuncs) IMLOG10(argsList *list.List) formulaArg {
 	if argsList.Len() != 1 {
 		return newErrorFormulaArg(formulaErrorVALUE, "IMLOG10 requires 1 argument")
 	}
-	inumber, err := strconv.ParseComplex(str2cmplx(argsList.Front().Value.(formulaArg).Value()), 128)
+	value := argsList.Front().Value.(formulaArg).Value()
+	inumber, err := strconv.ParseComplex(str2cmplx(value), 128)
 	if err != nil {
 		return newErrorFormulaArg(formulaErrorNUM, err.Error())
 	}
@@ -2530,7 +2583,7 @@ func (fn *formulaFuncs) IMLOG10(argsList *list.List) formulaArg {
 	if cmplx.IsInf(num) {
 		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 	}
-	return newStringFormulaArg(cmplx2str(fmt.Sprint(num), "i"))
+	return newStringFormulaArg(cmplx2str(num, value[len(value)-1:]))
 }
 
 // IMLOG2 function calculates the base 2 logarithm of a supplied complex
@@ -2542,7 +2595,8 @@ func (fn *formulaFuncs) IMLOG2(argsList *list.List) formulaArg {
 	if argsList.Len() != 1 {
 		return newErrorFormulaArg(formulaErrorVALUE, "IMLOG2 requires 1 argument")
 	}
-	inumber, err := strconv.ParseComplex(str2cmplx(argsList.Front().Value.(formulaArg).Value()), 128)
+	value := argsList.Front().Value.(formulaArg).Value()
+	inumber, err := strconv.ParseComplex(str2cmplx(value), 128)
 	if err != nil {
 		return newErrorFormulaArg(formulaErrorNUM, err.Error())
 	}
@@ -2550,7 +2604,7 @@ func (fn *formulaFuncs) IMLOG2(argsList *list.List) formulaArg {
 	if cmplx.IsInf(num) {
 		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 	}
-	return newStringFormulaArg(cmplx2str(fmt.Sprint(num/cmplx.Log(2)), "i"))
+	return newStringFormulaArg(cmplx2str(num/cmplx.Log(2), value[len(value)-1:]))
 }
 
 // IMPOWER function returns a supplied complex number, raised to a given
@@ -2562,7 +2616,8 @@ func (fn *formulaFuncs) IMPOWER(argsList *list.List) formulaArg {
 	if argsList.Len() != 2 {
 		return newErrorFormulaArg(formulaErrorVALUE, "IMPOWER requires 2 arguments")
 	}
-	inumber, err := strconv.ParseComplex(str2cmplx(argsList.Front().Value.(formulaArg).Value()), 128)
+	value := argsList.Front().Value.(formulaArg).Value()
+	inumber, err := strconv.ParseComplex(str2cmplx(value), 128)
 	if err != nil {
 		return newErrorFormulaArg(formulaErrorNUM, err.Error())
 	}
@@ -2577,7 +2632,7 @@ func (fn *formulaFuncs) IMPOWER(argsList *list.List) formulaArg {
 	if cmplx.IsInf(num) {
 		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 	}
-	return newStringFormulaArg(cmplx2str(fmt.Sprint(num), "i"))
+	return newStringFormulaArg(cmplx2str(num, value[len(value)-1:]))
 }
 
 // IMPRODUCT function calculates the product of two or more complex numbers.
@@ -2616,7 +2671,7 @@ func (fn *formulaFuncs) IMPRODUCT(argsList *list.List) formulaArg {
 			}
 		}
 	}
-	return newStringFormulaArg(cmplx2str(fmt.Sprint(product), "i"))
+	return newStringFormulaArg(cmplx2str(product, "i"))
 }
 
 // IMREAL function returns the real coefficient of a supplied complex number.
@@ -2628,11 +2683,12 @@ func (fn *formulaFuncs) IMREAL(argsList *list.List) formulaArg {
 	if argsList.Len() != 1 {
 		return newErrorFormulaArg(formulaErrorVALUE, "IMREAL requires 1 argument")
 	}
-	inumber, err := strconv.ParseComplex(str2cmplx(argsList.Front().Value.(formulaArg).Value()), 128)
+	value := argsList.Front().Value.(formulaArg).Value()
+	inumber, err := strconv.ParseComplex(str2cmplx(value), 128)
 	if err != nil {
 		return newErrorFormulaArg(formulaErrorNUM, err.Error())
 	}
-	return newStringFormulaArg(cmplx2str(fmt.Sprint(real(inumber)), "i"))
+	return newStringFormulaArg(fmt.Sprint(real(inumber)))
 }
 
 // IMSEC function returns the secant of a supplied complex number. The syntax
@@ -2644,11 +2700,12 @@ func (fn *formulaFuncs) IMSEC(argsList *list.List) formulaArg {
 	if argsList.Len() != 1 {
 		return newErrorFormulaArg(formulaErrorVALUE, "IMSEC requires 1 argument")
 	}
-	inumber, err := strconv.ParseComplex(str2cmplx(argsList.Front().Value.(formulaArg).Value()), 128)
+	value := argsList.Front().Value.(formulaArg).Value()
+	inumber, err := strconv.ParseComplex(str2cmplx(value), 128)
 	if err != nil {
 		return newErrorFormulaArg(formulaErrorNUM, err.Error())
 	}
-	return newStringFormulaArg(cmplx2str(fmt.Sprint(1/cmplx.Cos(inumber)), "i"))
+	return newStringFormulaArg(cmplx2str(1/cmplx.Cos(inumber), value[len(value)-1:]))
 }
 
 // IMSECH function returns the hyperbolic secant of a supplied complex number.
@@ -2660,11 +2717,12 @@ func (fn *formulaFuncs) IMSECH(argsList *list.List) formulaArg {
 	if argsList.Len() != 1 {
 		return newErrorFormulaArg(formulaErrorVALUE, "IMSECH requires 1 argument")
 	}
-	inumber, err := strconv.ParseComplex(str2cmplx(argsList.Front().Value.(formulaArg).Value()), 128)
+	value := argsList.Front().Value.(formulaArg).Value()
+	inumber, err := strconv.ParseComplex(str2cmplx(value), 128)
 	if err != nil {
 		return newErrorFormulaArg(formulaErrorNUM, err.Error())
 	}
-	return newStringFormulaArg(cmplx2str(fmt.Sprint(1/cmplx.Cosh(inumber)), "i"))
+	return newStringFormulaArg(cmplx2str(1/cmplx.Cosh(inumber), value[len(value)-1:]))
 }
 
 // IMSIN function returns the Sine of a supplied complex number. The syntax of
@@ -2676,11 +2734,12 @@ func (fn *formulaFuncs) IMSIN(argsList *list.List) formulaArg {
 	if argsList.Len() != 1 {
 		return newErrorFormulaArg(formulaErrorVALUE, "IMSIN requires 1 argument")
 	}
-	inumber, err := strconv.ParseComplex(str2cmplx(argsList.Front().Value.(formulaArg).Value()), 128)
+	value := argsList.Front().Value.(formulaArg).Value()
+	inumber, err := strconv.ParseComplex(str2cmplx(value), 128)
 	if err != nil {
 		return newErrorFormulaArg(formulaErrorNUM, err.Error())
 	}
-	return newStringFormulaArg(cmplx2str(fmt.Sprint(cmplx.Sin(inumber)), "i"))
+	return newStringFormulaArg(cmplx2str(cmplx.Sin(inumber), value[len(value)-1:]))
 }
 
 // IMSINH function returns the hyperbolic sine of a supplied complex number.
@@ -2692,11 +2751,12 @@ func (fn *formulaFuncs) IMSINH(argsList *list.List) formulaArg {
 	if argsList.Len() != 1 {
 		return newErrorFormulaArg(formulaErrorVALUE, "IMSINH requires 1 argument")
 	}
-	inumber, err := strconv.ParseComplex(str2cmplx(argsList.Front().Value.(formulaArg).Value()), 128)
+	value := argsList.Front().Value.(formulaArg).Value()
+	inumber, err := strconv.ParseComplex(str2cmplx(value), 128)
 	if err != nil {
 		return newErrorFormulaArg(formulaErrorNUM, err.Error())
 	}
-	return newStringFormulaArg(cmplx2str(fmt.Sprint(cmplx.Sinh(inumber)), "i"))
+	return newStringFormulaArg(cmplx2str(cmplx.Sinh(inumber), value[len(value)-1:]))
 }
 
 // IMSQRT function returns the square root of a supplied complex number. The
@@ -2708,11 +2768,12 @@ func (fn *formulaFuncs) IMSQRT(argsList *list.List) formulaArg {
 	if argsList.Len() != 1 {
 		return newErrorFormulaArg(formulaErrorVALUE, "IMSQRT requires 1 argument")
 	}
-	inumber, err := strconv.ParseComplex(str2cmplx(argsList.Front().Value.(formulaArg).Value()), 128)
+	value := argsList.Front().Value.(formulaArg).Value()
+	inumber, err := strconv.ParseComplex(str2cmplx(value), 128)
 	if err != nil {
 		return newErrorFormulaArg(formulaErrorNUM, err.Error())
 	}
-	return newStringFormulaArg(cmplx2str(fmt.Sprint(cmplx.Sqrt(inumber)), "i"))
+	return newStringFormulaArg(cmplx2str(cmplx.Sqrt(inumber), value[len(value)-1:]))
 }
 
 // IMSUB function calculates the difference between two complex numbers
@@ -2733,7 +2794,7 @@ func (fn *formulaFuncs) IMSUB(argsList *list.List) formulaArg {
 	if err != nil {
 		return newErrorFormulaArg(formulaErrorNUM, err.Error())
 	}
-	return newStringFormulaArg(cmplx2str(fmt.Sprint(i1-i2), "i"))
+	return newStringFormulaArg(cmplx2str(i1-i2, "i"))
 }
 
 // IMSUM function calculates the sum of two or more complex numbers. The
@@ -2754,7 +2815,7 @@ func (fn *formulaFuncs) IMSUM(argsList *list.List) formulaArg {
 		}
 		result += num
 	}
-	return newStringFormulaArg(cmplx2str(fmt.Sprint(result), "i"))
+	return newStringFormulaArg(cmplx2str(result, "i"))
 }
 
 // IMTAN function returns the tangent of a supplied complex number. The syntax
@@ -2766,11 +2827,12 @@ func (fn *formulaFuncs) IMTAN(argsList *list.List) formulaArg {
 	if argsList.Len() != 1 {
 		return newErrorFormulaArg(formulaErrorVALUE, "IMTAN requires 1 argument")
 	}
-	inumber, err := strconv.ParseComplex(str2cmplx(argsList.Front().Value.(formulaArg).Value()), 128)
+	value := argsList.Front().Value.(formulaArg).Value()
+	inumber, err := strconv.ParseComplex(str2cmplx(value), 128)
 	if err != nil {
 		return newErrorFormulaArg(formulaErrorNUM, err.Error())
 	}
-	return newStringFormulaArg(cmplx2str(fmt.Sprint(cmplx.Tan(inumber)), "i"))
+	return newStringFormulaArg(cmplx2str(cmplx.Tan(inumber), value[len(value)-1:]))
 }
 
 // OCT2BIN function converts an Octal (Base 8) number into a Binary (Base 2)
@@ -3716,7 +3778,7 @@ func (fn *formulaFuncs) GCD(argsList *list.List) formulaArg {
 	}
 	var (
 		val  float64
-		nums = []float64{}
+		nums []float64
 	)
 	for arg := argsList.Front(); arg != nil; arg = arg.Next() {
 		token := arg.Value.(formulaArg)
@@ -3833,7 +3895,7 @@ func (fn *formulaFuncs) LCM(argsList *list.List) formulaArg {
 	}
 	var (
 		val  float64
-		nums = []float64{}
+		nums []float64
 		err  error
 	)
 	for arg := argsList.Front(); arg != nil; arg = arg.Next() {
@@ -3938,12 +4000,12 @@ func (fn *formulaFuncs) LOG10(argsList *list.List) formulaArg {
 // minor function implement a minor of a matrix A is the determinant of some
 // smaller square matrix.
 func minor(sqMtx [][]float64, idx int) [][]float64 {
-	ret := [][]float64{}
+	var ret [][]float64
 	for i := range sqMtx {
 		if i == 0 {
 			continue
 		}
-		row := []float64{}
+		var row []float64
 		for j := range sqMtx {
 			if j == idx {
 				continue
@@ -3980,7 +4042,7 @@ func det(sqMtx [][]float64) float64 {
 func (fn *formulaFuncs) MDETERM(argsList *list.List) (result formulaArg) {
 	var (
 		num    float64
-		numMtx = [][]float64{}
+		numMtx [][]float64
 		err    error
 		strMtx [][]formulaArg
 	)
@@ -3993,7 +4055,7 @@ func (fn *formulaFuncs) MDETERM(argsList *list.List) (result formulaArg) {
 		if len(row) != rows {
 			return newErrorFormulaArg(formulaErrorVALUE, formulaErrorVALUE)
 		}
-		numRow := []float64{}
+		var numRow []float64
 		for _, ele := range row {
 			if num, err = strconv.ParseFloat(ele.String, 64); err != nil {
 				return newErrorFormulaArg(formulaErrorVALUE, err.Error())
@@ -4595,6 +4657,40 @@ func (fn *formulaFuncs) SECH(argsList *list.List) formulaArg {
 	return newNumberFormulaArg(1 / math.Cosh(number.Number))
 }
 
+// SERIESSUM function returns the sum of a power series. The syntax of the
+// function is:
+//
+//    SERIESSUM(x,n,m,coefficients)
+//
+func (fn *formulaFuncs) SERIESSUM(argsList *list.List) formulaArg {
+	if argsList.Len() != 4 {
+		return newErrorFormulaArg(formulaErrorVALUE, "SERIESSUM requires 4 arguments")
+	}
+	var x, n, m formulaArg
+	if x = argsList.Front().Value.(formulaArg).ToNumber(); x.Type != ArgNumber {
+		return x
+	}
+	if n = argsList.Front().Next().Value.(formulaArg).ToNumber(); n.Type != ArgNumber {
+		return n
+	}
+	if m = argsList.Front().Next().Next().Value.(formulaArg).ToNumber(); m.Type != ArgNumber {
+		return m
+	}
+	var result, i float64
+	for _, coefficient := range argsList.Back().Value.(formulaArg).ToList() {
+		if coefficient.Value() == "" {
+			continue
+		}
+		num := coefficient.ToNumber()
+		if num.Type != ArgNumber {
+			return num
+		}
+		result += num.Number * math.Pow(x.Number, n.Number+(m.Number*i))
+		i++
+	}
+	return newNumberFormulaArg(result)
+}
+
 // SIGN function returns the arithmetic sign (+1, -1 or 0) of a supplied
 // number. I.e. if the number is positive, the Sign function returns +1, if
 // the number is negative, the function returns -1 and if the number is 0
@@ -4726,9 +4822,9 @@ func (fn *formulaFuncs) STDEVA(argsList *list.List) formulaArg {
 // calcStdevPow is part of the implementation stdev.
 func calcStdevPow(result, count float64, n, m formulaArg) (float64, float64) {
 	if result == -1 {
-		result = math.Pow((n.Number - m.Number), 2)
+		result = math.Pow(n.Number-m.Number, 2)
 	} else {
-		result += math.Pow((n.Number - m.Number), 2)
+		result += math.Pow(n.Number-m.Number, 2)
 	}
 	count++
 	return result, count
@@ -4913,6 +5009,99 @@ func (fn *formulaFuncs) SUMIF(argsList *list.List) formulaArg {
 		}
 	}
 	return newNumberFormulaArg(sum)
+}
+
+// SUMIFS function finds values in one or more supplied arrays, that satisfy a
+// set of criteria, and returns the sum of the corresponding values in a
+// further supplied array. The syntax of the function is:
+//
+//    SUMIFS(sum_range,criteria_range1,criteria1,[criteria_range2,criteria2],...)
+//
+func (fn *formulaFuncs) SUMIFS(argsList *list.List) formulaArg {
+	if argsList.Len() < 3 {
+		return newErrorFormulaArg(formulaErrorVALUE, "SUMIFS requires at least 3 arguments")
+	}
+	if argsList.Len()%2 != 1 {
+		return newErrorFormulaArg(formulaErrorNA, formulaErrorNA)
+	}
+	var args []formulaArg
+	sum, sumRange := 0.0, argsList.Front().Value.(formulaArg).Matrix
+	for arg := argsList.Front().Next(); arg != nil; arg = arg.Next() {
+		args = append(args, arg.Value.(formulaArg))
+	}
+	for _, ref := range formulaIfsMatch(args) {
+		if num := sumRange[ref.Row][ref.Col].ToNumber(); num.Type == ArgNumber {
+			sum += num.Number
+		}
+	}
+	return newNumberFormulaArg(sum)
+}
+
+// sumproduct is an implementation of the formula function SUMPRODUCT.
+func (fn *formulaFuncs) sumproduct(argsList *list.List) formulaArg {
+	var (
+		argType ArgType
+		n       int
+		res     []float64
+		sum     float64
+	)
+	for arg := argsList.Front(); arg != nil; arg = arg.Next() {
+		token := arg.Value.(formulaArg)
+		if argType == ArgUnknown {
+			argType = token.Type
+		}
+		if token.Type != argType {
+			return newErrorFormulaArg(formulaErrorVALUE, formulaErrorVALUE)
+		}
+		switch token.Type {
+		case ArgString, ArgNumber:
+			if num := token.ToNumber(); num.Type == ArgNumber {
+				sum = fn.PRODUCT(argsList).Number
+				continue
+			}
+			return newErrorFormulaArg(formulaErrorVALUE, formulaErrorVALUE)
+		case ArgMatrix:
+			args := token.ToList()
+			if res == nil {
+				n = len(args)
+				res = make([]float64, n)
+				for i := range res {
+					res[i] = 1.0
+				}
+			}
+			if len(args) != n {
+				return newErrorFormulaArg(formulaErrorVALUE, formulaErrorVALUE)
+			}
+			for i, value := range args {
+				num := value.ToNumber()
+				if num.Type != ArgNumber && value.Value() != "" {
+					return newErrorFormulaArg(formulaErrorVALUE, formulaErrorVALUE)
+				}
+				res[i] = res[i] * num.Number
+			}
+		}
+	}
+	for _, r := range res {
+		sum += r
+	}
+	return newNumberFormulaArg(sum)
+}
+
+// SUMPRODUCT function returns the sum of the products of the corresponding
+// values in a set of supplied arrays. The syntax of the function is:
+//
+//    SUMPRODUCT(array1,[array2],[array3],...)
+//
+func (fn *formulaFuncs) SUMPRODUCT(argsList *list.List) formulaArg {
+	if argsList.Len() < 1 {
+		return newErrorFormulaArg(formulaErrorVALUE, "SUMPRODUCT requires at least 1 argument")
+	}
+	for arg := argsList.Front(); arg != nil; arg = arg.Next() {
+		if token := arg.Value.(formulaArg); token.Type == ArgError {
+			return token
+		}
+	}
+	return fn.sumproduct(argsList)
 }
 
 // SUMSQ function returns the sum of squares of a supplied set of values. The
@@ -5111,7 +5300,7 @@ func (fn *formulaFuncs) AVEDEV(argsList *list.List) formulaArg {
 //    AVERAGE(number1,[number2],...)
 //
 func (fn *formulaFuncs) AVERAGE(argsList *list.List) formulaArg {
-	args := []formulaArg{}
+	var args []formulaArg
 	for arg := argsList.Front(); arg != nil; arg = arg.Next() {
 		args = append(args, arg.Value.(formulaArg))
 	}
@@ -5128,7 +5317,7 @@ func (fn *formulaFuncs) AVERAGE(argsList *list.List) formulaArg {
 //    AVERAGEA(number1,[number2],...)
 //
 func (fn *formulaFuncs) AVERAGEA(argsList *list.List) formulaArg {
-	args := []formulaArg{}
+	var args []formulaArg
 	for arg := argsList.Front(); arg != nil; arg = arg.Next() {
 		args = append(args, arg.Value.(formulaArg))
 	}
@@ -5188,6 +5377,357 @@ func (fn *formulaFuncs) AVERAGEIF(argsList *list.List) formulaArg {
 		return newErrorFormulaArg(formulaErrorDIV, "AVERAGEIF divide by zero")
 	}
 	return newNumberFormulaArg(sum / count)
+}
+
+// AVERAGEIFS function finds entries in one or more arrays, that satisfy a set
+// of supplied criteria, and returns the average (i.e. the statistical mean)
+// of the corresponding values in a further supplied array. The syntax of the
+// function is:
+//
+//    AVERAGEIFS(average_range,criteria_range1,criteria1,[criteria_range2,criteria2],...)
+//
+func (fn *formulaFuncs) AVERAGEIFS(argsList *list.List) formulaArg {
+	if argsList.Len() < 3 {
+		return newErrorFormulaArg(formulaErrorVALUE, "AVERAGEIFS requires at least 3 arguments")
+	}
+	if argsList.Len()%2 != 1 {
+		return newErrorFormulaArg(formulaErrorNA, formulaErrorNA)
+	}
+	var args []formulaArg
+	sum, sumRange := 0.0, argsList.Front().Value.(formulaArg).Matrix
+	for arg := argsList.Front().Next(); arg != nil; arg = arg.Next() {
+		args = append(args, arg.Value.(formulaArg))
+	}
+	count := 0.0
+	for _, ref := range formulaIfsMatch(args) {
+		if num := sumRange[ref.Row][ref.Col].ToNumber(); num.Type == ArgNumber {
+			sum += num.Number
+			count++
+		}
+	}
+	if count == 0 {
+		return newErrorFormulaArg(formulaErrorDIV, "AVERAGEIF divide by zero")
+	}
+	return newNumberFormulaArg(sum / count)
+}
+
+// getBetaHelperContFrac continued fractions for the beta function.
+func getBetaHelperContFrac(fX, fA, fB float64) float64 {
+	var a1, b1, a2, b2, fnorm, cfnew, cf, rm float64
+	a1, b1, b2 = 1, 1, 1-(fA+fB)/(fA+1)*fX
+	if b2 == 0 {
+		a2, fnorm, cf = 0, 1, 1
+	} else {
+		a2, fnorm = 1, 1/b2
+		cf = a2 * fnorm
+	}
+	cfnew, rm = 1, 1
+	fMaxIter, fMachEps := 50000.0, 2.22045e-016
+	bfinished := false
+	for rm < fMaxIter && !bfinished {
+		apl2m := fA + 2*rm
+		d2m := rm * (fB - rm) * fX / ((apl2m - 1) * apl2m)
+		d2m1 := -(fA + rm) * (fA + fB + rm) * fX / (apl2m * (apl2m + 1))
+		a1 = (a2 + d2m*a1) * fnorm
+		b1 = (b2 + d2m*b1) * fnorm
+		a2 = a1 + d2m1*a2*fnorm
+		b2 = b1 + d2m1*b2*fnorm
+		if b2 != 0 {
+			fnorm = 1 / b2
+			cfnew = a2 * fnorm
+			bfinished = math.Abs(cf-cfnew) < math.Abs(cf)*fMachEps
+		}
+		cf = cfnew
+		rm += 1
+	}
+	return cf
+}
+
+// getLanczosSum uses a variant of the Lanczos sum with a rational function.
+func getLanczosSum(fZ float64) float64 {
+	num := []float64{
+		23531376880.41075968857200767445163675473,
+		42919803642.64909876895789904700198885093,
+		35711959237.35566804944018545154716670596,
+		17921034426.03720969991975575445893111267,
+		6039542586.35202800506429164430729792107,
+		1439720407.311721673663223072794912393972,
+		248874557.8620541565114603864132294232163,
+		31426415.58540019438061423162831820536287,
+		2876370.628935372441225409051620849613599,
+		186056.2653952234950402949897160456992822,
+		8071.672002365816210638002902272250613822,
+		210.8242777515793458725097339207133627117,
+		2.506628274631000270164908177133837338626,
+	}
+	denom := []float64{
+		0,
+		39916800,
+		120543840,
+		150917976,
+		105258076,
+		45995730,
+		13339535,
+		2637558,
+		357423,
+		32670,
+		1925,
+		66,
+		1,
+	}
+	var sumNum, sumDenom, zInv float64
+	if fZ <= 1 {
+		sumNum = num[12]
+		sumDenom = denom[12]
+		for i := 11; i >= 0; i-- {
+			sumNum *= fZ
+			sumNum += num[i]
+			sumDenom *= fZ
+			sumDenom += denom[i]
+		}
+	} else {
+		zInv = 1 / fZ
+		sumNum = num[0]
+		sumDenom = denom[0]
+		for i := 1; i <= 12; i++ {
+			sumNum *= zInv
+			sumNum += num[i]
+			sumDenom *= zInv
+			sumDenom += denom[i]
+		}
+	}
+	return sumNum / sumDenom
+}
+
+// getBeta return beta distribution.
+func getBeta(fAlpha, fBeta float64) float64 {
+	var fA, fB float64
+	if fAlpha > fBeta {
+		fA = fAlpha
+		fB = fBeta
+	} else {
+		fA = fBeta
+		fB = fAlpha
+	}
+	const maxGammaArgument = 171.624376956302
+	if fA+fB < maxGammaArgument {
+		return math.Gamma(fA) / math.Gamma(fA+fB) * math.Gamma(fB)
+	}
+	fg := 6.024680040776729583740234375
+	fgm := fg - 0.5
+	fLanczos := getLanczosSum(fA)
+	fLanczos /= getLanczosSum(fA + fB)
+	fLanczos *= getLanczosSum(fB)
+	fABgm := fA + fB + fgm
+	fLanczos *= math.Sqrt((fABgm / (fA + fgm)) / (fB + fgm))
+	fTempA := fB / (fA + fgm)
+	fTempB := fA / (fB + fgm)
+	fResult := math.Exp(-fA*math.Log1p(fTempA) - fB*math.Log1p(fTempB) - fgm)
+	fResult *= fLanczos
+	return fResult
+}
+
+// getBetaDistPDF is an implementation for the Beta probability density
+// function.
+func getBetaDistPDF(fX, fA, fB float64) float64 {
+	if fX <= 0 || fX >= 1 {
+		return 0
+	}
+	fLogDblMax, fLogDblMin := math.Log(1.79769e+308), math.Log(2.22507e-308)
+	fLogY := math.Log(0.5 - fX + 0.5)
+	if fX < 0.1 {
+		fLogY = math.Log1p(-fX)
+	}
+	fLogX := math.Log(fX)
+	fAm1LogX := (fA - 1) * fLogX
+	fBm1LogY := (fB - 1) * fLogY
+	fLogBeta := getLogBeta(fA, fB)
+	if fAm1LogX < fLogDblMax && fAm1LogX > fLogDblMin && fBm1LogY < fLogDblMax &&
+		fBm1LogY > fLogDblMin && fLogBeta < fLogDblMax && fLogBeta > fLogDblMin &&
+		fAm1LogX+fBm1LogY < fLogDblMax && fAm1LogX+fBm1LogY > fLogDblMin {
+		return math.Pow(fX, fA-1) * math.Pow(0.5-fX+0.5, fB-1) / getBeta(fA, fB)
+	}
+	return math.Exp(fAm1LogX + fBm1LogY - fLogBeta)
+}
+
+// getLogBeta return beta with logarithm.
+func getLogBeta(fAlpha, fBeta float64) float64 {
+	var fA, fB float64
+	if fAlpha > fBeta {
+		fA, fB = fAlpha, fBeta
+	} else {
+		fA, fB = fBeta, fAlpha
+	}
+	fg := 6.024680040776729583740234375
+	fgm := fg - 0.5
+	fLanczos := getLanczosSum(fA)
+	fLanczos /= getLanczosSum(fA + fB)
+	fLanczos *= getLanczosSum(fB)
+	fLogLanczos := math.Log(fLanczos)
+	fABgm := fA + fB + fgm
+	fLogLanczos += 0.5 * (math.Log(fABgm) - math.Log(fA+fgm) - math.Log(fB+fgm))
+	fTempA := fB / (fA + fgm)
+	fTempB := fA / (fB + fgm)
+	fResult := -fA*math.Log1p(fTempA) - fB*math.Log1p(fTempB) - fgm
+	fResult += fLogLanczos
+	return fResult
+}
+
+// getBetaDist is an implementation for the beta distribution function.
+func getBetaDist(fXin, fAlpha, fBeta float64) float64 {
+	if fXin <= 0 {
+		return 0
+	}
+	if fXin >= 1 {
+		return 1
+	}
+	if fBeta == 1 {
+		return math.Pow(fXin, fAlpha)
+	}
+	if fAlpha == 1 {
+		return -math.Expm1(fBeta * math.Log1p(-fXin))
+	}
+	var fResult float64
+	fY, flnY := (0.5-fXin)+0.5, math.Log1p(-fXin)
+	fX, flnX := fXin, math.Log(fXin)
+	fA, fB := fAlpha, fBeta
+	bReflect := fXin > fAlpha/(fAlpha+fBeta)
+	if bReflect {
+		fA = fBeta
+		fB = fAlpha
+		fX = fY
+		fY = fXin
+		flnX = flnY
+		flnY = math.Log(fXin)
+	}
+	fResult = getBetaHelperContFrac(fX, fA, fB) / fA
+	fP, fQ := fA/(fA+fB), fB/(fA+fB)
+	var fTemp float64
+	if fA > 1 && fB > 1 && fP < 0.97 && fQ < 0.97 {
+		fTemp = getBetaDistPDF(fX, fA, fB) * fX * fY
+	} else {
+		fTemp = math.Exp(fA*flnX + fB*flnY - getLogBeta(fA, fB))
+	}
+	fResult *= fTemp
+	if bReflect {
+		fResult = 0.5 - fResult + 0.5
+	}
+	return fResult
+}
+
+// prepareBETAdotDISTArgs checking and prepare arguments for the formula
+// function BETA.DIST.
+func (fn *formulaFuncs) prepareBETAdotDISTArgs(argsList *list.List) formulaArg {
+	if argsList.Len() < 4 {
+		return newErrorFormulaArg(formulaErrorVALUE, "BETA.DIST requires at least 4 arguments")
+	}
+	if argsList.Len() > 6 {
+		return newErrorFormulaArg(formulaErrorVALUE, "BETA.DIST requires at most 6 arguments")
+	}
+	x := argsList.Front().Value.(formulaArg).ToNumber()
+	if x.Type != ArgNumber {
+		return x
+	}
+	alpha := argsList.Front().Next().Value.(formulaArg).ToNumber()
+	if alpha.Type != ArgNumber {
+		return alpha
+	}
+	beta := argsList.Front().Next().Next().Value.(formulaArg).ToNumber()
+	if beta.Type != ArgNumber {
+		return beta
+	}
+	if alpha.Number <= 0 || beta.Number <= 0 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	cumulative := argsList.Front().Next().Next().Next().Value.(formulaArg).ToBool()
+	if cumulative.Type != ArgNumber {
+		return cumulative
+	}
+	a, b := newNumberFormulaArg(0), newNumberFormulaArg(1)
+	if argsList.Len() > 4 {
+		if a = argsList.Front().Next().Next().Next().Next().Value.(formulaArg).ToNumber(); a.Type != ArgNumber {
+			return a
+		}
+	}
+	if argsList.Len() == 6 {
+		if b = argsList.Back().Value.(formulaArg).ToNumber(); b.Type != ArgNumber {
+			return b
+		}
+	}
+	return newListFormulaArg([]formulaArg{x, alpha, beta, cumulative, a, b})
+}
+
+// BETAdotDIST function calculates the cumulative beta distribution function
+// or the probability density function of the Beta distribution, for a
+// supplied set of parameters. The syntax of the function is:
+//
+//    BETA.DIST(x,alpha,beta,cumulative,[A],[B])
+//
+func (fn *formulaFuncs) BETAdotDIST(argsList *list.List) formulaArg {
+	args := fn.prepareBETAdotDISTArgs(argsList)
+	if args.Type != ArgList {
+		return args
+	}
+	x, alpha, beta, cumulative, a, b := args.List[0], args.List[1], args.List[2], args.List[3], args.List[4], args.List[5]
+	if x.Number < a.Number || x.Number > b.Number {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	if a.Number == b.Number {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	fScale := b.Number - a.Number
+	x.Number = (x.Number - a.Number) / fScale
+	if cumulative.Number == 1 {
+		return newNumberFormulaArg(getBetaDist(x.Number, alpha.Number, beta.Number))
+	}
+	return newNumberFormulaArg(getBetaDistPDF(x.Number, alpha.Number, beta.Number) / fScale)
+}
+
+// BETADIST function calculates the cumulative beta probability density
+// function for a supplied set of parameters. The syntax of the function is:
+//
+//    BETADIST(x,alpha,beta,[A],[B])
+//
+func (fn *formulaFuncs) BETADIST(argsList *list.List) formulaArg {
+	if argsList.Len() < 3 {
+		return newErrorFormulaArg(formulaErrorVALUE, "BETADIST requires at least 3 arguments")
+	}
+	if argsList.Len() > 5 {
+		return newErrorFormulaArg(formulaErrorVALUE, "BETADIST requires at most 5 arguments")
+	}
+	x := argsList.Front().Value.(formulaArg).ToNumber()
+	if x.Type != ArgNumber {
+		return x
+	}
+	alpha := argsList.Front().Next().Value.(formulaArg).ToNumber()
+	if alpha.Type != ArgNumber {
+		return alpha
+	}
+	beta := argsList.Front().Next().Next().Value.(formulaArg).ToNumber()
+	if beta.Type != ArgNumber {
+		return beta
+	}
+	if alpha.Number <= 0 || beta.Number <= 0 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	a, b := newNumberFormulaArg(0), newNumberFormulaArg(1)
+	if argsList.Len() > 3 {
+		if a = argsList.Front().Next().Next().Next().Value.(formulaArg).ToNumber(); a.Type != ArgNumber {
+			return a
+		}
+	}
+	if argsList.Len() == 5 {
+		if b = argsList.Back().Value.(formulaArg).ToNumber(); b.Type != ArgNumber {
+			return b
+		}
+	}
+	if x.Number < a.Number || x.Number > b.Number {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	if a.Number == b.Number {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	return newNumberFormulaArg(getBetaDist((x.Number-a.Number)/(b.Number-a.Number), alpha.Number, beta.Number))
 }
 
 // d1mach returns double precision real machine constants.
@@ -5318,7 +5858,8 @@ func logBeta(a, b float64) float64 {
 	}
 	if p >= 10.0 {
 		corr = lgammacor(p) + lgammacor(q) - lgammacor(p+q)
-		return math.Log(q)*-0.5 + 0.918938533204672741780329736406 + corr + (p-0.5)*math.Log(p/(p+q)) + q*logrelerr(-p/(p+q))
+		f1 := q * logrelerr(-p/(p+q))
+		return math.Log(q)*-0.5 + 0.918938533204672741780329736406 + corr + (p-0.5)*math.Log(p/(p+q)) + math.Nextafter(f1, f1)
 	}
 	if q >= 10 {
 		corr = lgammacor(q) - lgammacor(p+q)
@@ -5411,12 +5952,12 @@ func pbeta(x, pin, qin float64) (ans float64) {
 
 // betainvProbIterator is a part of betainv for the inverse of the beta
 // function.
-func betainvProbIterator(alpha1, alpha3, beta1, beta2, beta3, logbeta, lower, maxCumulative, prob1, prob2, upper float64, needSwap bool) float64 {
+func betainvProbIterator(alpha1, alpha3, beta1, beta2, beta3, logBeta, maxCumulative, prob1, prob2 float64) float64 {
 	var i, j, prev, prop4 float64
 	j = 1
 	for prob := 0; prob < 1000; prob++ {
 		prop3 := pbeta(beta3, alpha1, beta1)
-		prop3 = (prop3 - prob1) * math.Exp(logbeta+prob2*math.Log(beta3)+beta2*math.Log(1.0-beta3))
+		prop3 = (prop3 - prob1) * math.Exp(logBeta+prob2*math.Log(beta3)+beta2*math.Log(1.0-beta3))
 		if prop3*prop4 <= 0 {
 			prev = math.Max(math.Abs(j), maxCumulative)
 		}
@@ -5459,7 +6000,7 @@ func calcBetainv(probability, alpha, beta, lower, upper float64) float64 {
 	} else {
 		prob1, alpha1, beta1, needSwap = 1.0-probability, beta, alpha, true
 	}
-	logbeta := logBeta(alpha, beta)
+	logBetaNum := logBeta(alpha, beta)
 	prob2 := math.Sqrt(-math.Log(prob1 * prob1))
 	prob3 := prob2 - (prob2*0.27061+2.3075)/(prob2*(prob2*0.04481+0.99229)+1)
 	if alpha1 > 1 && beta1 > 1 {
@@ -5471,11 +6012,11 @@ func calcBetainv(probability, alpha, beta, lower, upper float64) float64 {
 		beta2, prob2 = 1/(beta1*9), beta1+beta1
 		beta2 = prob2 * math.Pow(1-beta2+prob3*math.Sqrt(beta2), 3)
 		if beta2 <= 0 {
-			beta3 = 1 - math.Exp((math.Log((1-prob1)*beta1)+logbeta)/beta1)
+			beta3 = 1 - math.Exp((math.Log((1-prob1)*beta1)+logBetaNum)/beta1)
 		} else {
 			beta2 = (prob2 + alpha1*4 - 2) / beta2
 			if beta2 <= 1 {
-				beta3 = math.Exp((logbeta + math.Log(alpha1*prob1)) / alpha1)
+				beta3 = math.Exp((logBetaNum + math.Log(alpha1*prob1)) / alpha1)
 			} else {
 				beta3 = 1 - 2/(beta2+1)
 			}
@@ -5488,7 +6029,7 @@ func calcBetainv(probability, alpha, beta, lower, upper float64) float64 {
 		beta3 = upperBound
 	}
 	alpha3 := math.Max(minCumulative, math.Pow(10.0, -13.0-2.5/(alpha1*alpha1)-0.5/(prob1*prob1)))
-	beta3 = betainvProbIterator(alpha1, alpha3, beta1, beta2, beta3, logbeta, lower, maxCumulative, prob1, prob2, upper, needSwap)
+	beta3 = betainvProbIterator(alpha1, alpha3, beta1, beta2, beta3, logBetaNum, maxCumulative, prob1, prob2)
 	if needSwap {
 		beta3 = 1.0 - beta3
 	}
@@ -5566,11 +6107,176 @@ func incompleteGamma(a, x float64) float64 {
 	for n := 0; n <= max; n++ {
 		divisor := a
 		for i := 1; i <= n; i++ {
-			divisor *= (a + float64(i))
+			divisor *= a + float64(i)
 		}
 		summer += math.Pow(x, float64(n)) / divisor
 	}
 	return math.Pow(x, a) * math.Exp(0-x) * summer
+}
+
+// binomCoeff implement binomial coefficient calculation.
+func binomCoeff(n, k float64) float64 {
+	return fact(n) / (fact(k) * fact(n-k))
+}
+
+// binomdist implement binomial distribution calculation.
+func binomdist(x, n, p float64) float64 {
+	return binomCoeff(n, x) * math.Pow(p, x) * math.Pow(1-p, n-x)
+}
+
+// BINOMdotDIST function returns the Binomial Distribution probability for a
+// given number of successes from a specified number of trials. The syntax of
+// the function is:
+//
+//    BINOM.DIST(number_s,trials,probability_s,cumulative)
+//
+func (fn *formulaFuncs) BINOMdotDIST(argsList *list.List) formulaArg {
+	if argsList.Len() != 4 {
+		return newErrorFormulaArg(formulaErrorVALUE, "BINOM.DIST requires 4 arguments")
+	}
+	return fn.BINOMDIST(argsList)
+}
+
+// BINOMDIST function returns the Binomial Distribution probability of a
+// specified number of successes out of a specified number of trials. The
+// syntax of the function is:
+//
+//    BINOMDIST(number_s,trials,probability_s,cumulative)
+//
+func (fn *formulaFuncs) BINOMDIST(argsList *list.List) formulaArg {
+	if argsList.Len() != 4 {
+		return newErrorFormulaArg(formulaErrorVALUE, "BINOMDIST requires 4 arguments")
+	}
+	var s, trials, probability, cumulative formulaArg
+	if s = argsList.Front().Value.(formulaArg).ToNumber(); s.Type != ArgNumber {
+		return s
+	}
+	if trials = argsList.Front().Next().Value.(formulaArg).ToNumber(); trials.Type != ArgNumber {
+		return trials
+	}
+	if s.Number < 0 || s.Number > trials.Number {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	if probability = argsList.Back().Prev().Value.(formulaArg).ToNumber(); probability.Type != ArgNumber {
+		return probability
+	}
+
+	if probability.Number < 0 || probability.Number > 1 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	if cumulative = argsList.Back().Value.(formulaArg).ToBool(); cumulative.Type == ArgError {
+		return cumulative
+	}
+	if cumulative.Number == 1 {
+		bm := 0.0
+		for i := 0; i <= int(s.Number); i++ {
+			bm += binomdist(float64(i), trials.Number, probability.Number)
+		}
+		return newNumberFormulaArg(bm)
+	}
+	return newNumberFormulaArg(binomdist(s.Number, trials.Number, probability.Number))
+}
+
+// BINOMdotDISTdotRANGE function returns the Binomial Distribution probability
+// for the number of successes from a specified number of trials falling into
+// a specified range.
+//
+//    BINOM.DIST.RANGE(trials,probability_s,number_s,[number_s2])
+//
+func (fn *formulaFuncs) BINOMdotDISTdotRANGE(argsList *list.List) formulaArg {
+	if argsList.Len() < 3 {
+		return newErrorFormulaArg(formulaErrorVALUE, "BINOM.DIST.RANGE requires at least 3 arguments")
+	}
+	if argsList.Len() > 4 {
+		return newErrorFormulaArg(formulaErrorVALUE, "BINOM.DIST.RANGE requires at most 4 arguments")
+	}
+	trials := argsList.Front().Value.(formulaArg).ToNumber()
+	if trials.Type != ArgNumber {
+		return trials
+	}
+	probability := argsList.Front().Next().Value.(formulaArg).ToNumber()
+	if probability.Type != ArgNumber {
+		return probability
+	}
+	if probability.Number < 0 || probability.Number > 1 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	num1 := argsList.Front().Next().Next().Value.(formulaArg).ToNumber()
+	if num1.Type != ArgNumber {
+		return num1
+	}
+	if num1.Number < 0 || num1.Number > trials.Number {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	num2 := num1
+	if argsList.Len() > 3 {
+		if num2 = argsList.Back().Value.(formulaArg).ToNumber(); num2.Type != ArgNumber {
+			return num2
+		}
+	}
+	if num2.Number < 0 || num2.Number > trials.Number {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	sum := 0.0
+	for i := num1.Number; i <= num2.Number; i++ {
+		sum += binomdist(i, trials.Number, probability.Number)
+	}
+	return newNumberFormulaArg(sum)
+}
+
+// binominv implement inverse of the binomial distribution calculation.
+func binominv(n, p, alpha float64) float64 {
+	q, i, sum, max := 1-p, 0.0, 0.0, 0.0
+	n = math.Floor(n)
+	if q > p {
+		factor := math.Pow(q, n)
+		sum = factor
+		for i = 0; i < n && sum < alpha; i++ {
+			factor *= (n - i) / (i + 1) * p / q
+			sum += factor
+		}
+		return i
+	}
+	factor := math.Pow(p, n)
+	sum, max = 1-factor, n
+	for i = 0; i < max && sum >= alpha; i++ {
+		factor *= (n - i) / (i + 1) * q / p
+		sum -= factor
+	}
+	return n - i
+}
+
+// BINOMdotINV function returns the inverse of the Cumulative Binomial
+// Distribution. The syntax of the function is:
+//
+//    BINOM.INV(trials,probability_s,alpha)
+//
+func (fn *formulaFuncs) BINOMdotINV(argsList *list.List) formulaArg {
+	if argsList.Len() != 3 {
+		return newErrorFormulaArg(formulaErrorVALUE, "BINOM.INV requires 3 numeric arguments")
+	}
+	trials := argsList.Front().Value.(formulaArg).ToNumber()
+	if trials.Type != ArgNumber {
+		return trials
+	}
+	if trials.Number < 0 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	probability := argsList.Front().Next().Value.(formulaArg).ToNumber()
+	if probability.Type != ArgNumber {
+		return probability
+	}
+	if probability.Number <= 0 || probability.Number >= 1 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	alpha := argsList.Back().Value.(formulaArg).ToNumber()
+	if alpha.Type != ArgNumber {
+		return alpha
+	}
+	if alpha.Number <= 0 || alpha.Number >= 1 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	return newNumberFormulaArg(binominv(trials.Number, probability.Number, alpha.Number))
 }
 
 // CHIDIST function calculates the right-tailed probability of the chi-square
@@ -5586,11 +6292,462 @@ func (fn *formulaFuncs) CHIDIST(argsList *list.List) formulaArg {
 	if x.Type != ArgNumber {
 		return x
 	}
-	degress := argsList.Back().Value.(formulaArg).ToNumber()
-	if degress.Type != ArgNumber {
-		return degress
+	degrees := argsList.Back().Value.(formulaArg).ToNumber()
+	if degrees.Type != ArgNumber {
+		return degrees
 	}
-	return newNumberFormulaArg(1 - (incompleteGamma(degress.Number/2, x.Number/2) / math.Gamma(degress.Number/2)))
+	logSqrtPi, sqrtPi := math.Log(math.Sqrt(math.Pi)), 1/math.Sqrt(math.Pi)
+	var e, s, z, c, y float64
+	a, x1, even := x.Number/2, x.Number, int(degrees.Number)%2 == 0
+	if degrees.Number > 1 {
+		y = math.Exp(-a)
+	}
+	args := list.New()
+	args.PushBack(newNumberFormulaArg(-math.Sqrt(x1)))
+	o := fn.NORMSDIST(args)
+	s = 2 * o.Number
+	if even {
+		s = y
+	}
+	if degrees.Number > 2 {
+		x1 = (degrees.Number - 1) / 2
+		z = 0.5
+		if even {
+			z = 1
+		}
+		if a > 20 {
+			e = logSqrtPi
+			if even {
+				e = 0
+			}
+			c = math.Log(a)
+			for z <= x1 {
+				e = math.Log(z) + e
+				s += math.Exp(c*z - a - e)
+				z += 1
+			}
+			return newNumberFormulaArg(s)
+		}
+		e = sqrtPi / math.Sqrt(a)
+		if even {
+			e = 1
+		}
+		c = 0
+		for z <= x1 {
+			e = e * (a / z)
+			c = c + e
+			z += 1
+		}
+		return newNumberFormulaArg(c*y + s)
+	}
+	return newNumberFormulaArg(s)
+}
+
+// CHIINV function calculates the inverse of the right-tailed probability of
+// the Chi-Square Distribution. The syntax of the function is:
+//
+//    CHIINV(probability,deg_freedom)
+//
+func (fn *formulaFuncs) CHIINV(argsList *list.List) formulaArg {
+	if argsList.Len() != 2 {
+		return newErrorFormulaArg(formulaErrorVALUE, "CHIINV requires 2 numeric arguments")
+	}
+	probability := argsList.Front().Value.(formulaArg).ToNumber()
+	if probability.Type != ArgNumber {
+		return probability
+	}
+	if probability.Number <= 0 || probability.Number > 1 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	deg := argsList.Back().Value.(formulaArg).ToNumber()
+	if deg.Type != ArgNumber {
+		return deg
+	}
+	if deg.Number < 1 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	return newNumberFormulaArg(gammainv(1-probability.Number, 0.5*deg.Number, 2.0))
+}
+
+// CHITEST function uses the chi-square test to calculate the probability that
+// the differences between two supplied data sets (of observed and expected
+// frequencies), are likely to be simply due to sampling error, or if they are
+// likely to be real. The syntax of the function is:
+//
+//    CHITEST(actual_range,expected_range)
+//
+func (fn *formulaFuncs) CHITEST(argsList *list.List) formulaArg {
+	if argsList.Len() != 2 {
+		return newErrorFormulaArg(formulaErrorVALUE, "CHITEST requires 2 arguments")
+	}
+	actual, expected := argsList.Front().Value.(formulaArg), argsList.Back().Value.(formulaArg)
+	actualList, expectedList := actual.ToList(), expected.ToList()
+	rows := len(actual.Matrix)
+	columns := len(actualList) / rows
+	if len(actualList) != len(expectedList) || len(actualList) == 1 {
+		return newErrorFormulaArg(formulaErrorNA, formulaErrorNA)
+	}
+	var result float64
+	var degrees int
+	for i := 0; i < len(actualList); i++ {
+		a, e := actualList[i].ToNumber(), expectedList[i].ToNumber()
+		if a.Type == ArgNumber && e.Type == ArgNumber {
+			if e.Number == 0 {
+				return newErrorFormulaArg(formulaErrorDIV, formulaErrorDIV)
+			}
+			if e.Number < 0 {
+				return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+			}
+			result += (a.Number - e.Number) * (a.Number - e.Number) / e.Number
+		}
+	}
+	if rows == 1 {
+		degrees = columns - 1
+	} else if columns == 1 {
+		degrees = rows - 1
+	} else {
+		degrees = (columns - 1) * (rows - 1)
+	}
+	args := list.New()
+	args.PushBack(newNumberFormulaArg(result))
+	args.PushBack(newNumberFormulaArg(float64(degrees)))
+	return fn.CHIDIST(args)
+}
+
+// getGammaSeries calculates a power-series of the gamma function.
+func getGammaSeries(fA, fX float64) float64 {
+	var (
+		fHalfMachEps = 2.22045e-016 / 2
+		fDenomfactor = fA
+		fSummand     = 1 / fA
+		fSum         = fSummand
+		nCount       = 1
+	)
+	for fSummand/fSum > fHalfMachEps && nCount <= 10000 {
+		fDenomfactor = fDenomfactor + 1
+		fSummand = fSummand * fX / fDenomfactor
+		fSum = fSum + fSummand
+		nCount = nCount + 1
+	}
+	return fSum
+}
+
+// getGammaContFraction returns continued fraction with odd items of the gamma
+// function.
+func getGammaContFraction(fA, fX float64) float64 {
+	var (
+		fBigInv      = 2.22045e-016
+		fHalfMachEps = fBigInv / 2
+		fBig         = 1 / fBigInv
+		fCount       = 0.0
+		fY           = 1 - fA
+		fDenom       = fX + 2 - fA
+		fPkm1        = fX + 1
+		fPkm2        = 1.0
+		fQkm1        = fDenom * fX
+		fQkm2        = fX
+		fApprox      = fPkm1 / fQkm1
+		bFinished    = false
+	)
+	for !bFinished && fCount < 10000 {
+		fCount = fCount + 1
+		fY = fY + 1
+		fDenom = fDenom + 2
+		var (
+			fNum = fY * fCount
+			f1   = fPkm1 * fDenom
+			f2   = fPkm2 * fNum
+			fPk  = math.Nextafter(f1, f1) - math.Nextafter(f2, f2)
+			f3   = fQkm1 * fDenom
+			f4   = fQkm2 * fNum
+			fQk  = math.Nextafter(f3, f3) - math.Nextafter(f4, f4)
+		)
+		if fQk != 0 {
+			fR := fPk / fQk
+			bFinished = math.Abs((fApprox-fR)/fR) <= fHalfMachEps
+			fApprox = fR
+		}
+		fPkm2, fPkm1, fQkm2, fQkm1 = fPkm1, fPk, fQkm1, fQk
+		if math.Abs(fPk) > fBig {
+			// reduce a fraction does not change the value
+			fPkm2 = fPkm2 * fBigInv
+			fPkm1 = fPkm1 * fBigInv
+			fQkm2 = fQkm2 * fBigInv
+			fQkm1 = fQkm1 * fBigInv
+		}
+	}
+	return fApprox
+}
+
+// getLogGammaHelper is a part of implementation of the function getLogGamma.
+func getLogGammaHelper(fZ float64) float64 {
+	_fg := 6.024680040776729583740234375
+	zgHelp := fZ + _fg - 0.5
+	return math.Log(getLanczosSum(fZ)) + (fZ-0.5)*math.Log(zgHelp) - zgHelp
+}
+
+// getGammaHelper is a part of implementation of the function getLogGamma.
+func getGammaHelper(fZ float64) float64 {
+	var (
+		gamma  = getLanczosSum(fZ)
+		fg     = 6.024680040776729583740234375
+		zgHelp = fZ + fg - 0.5
+		// avoid intermediate overflow
+		halfpower = math.Pow(zgHelp, fZ/2-0.25)
+	)
+	gamma *= halfpower
+	gamma /= math.Exp(zgHelp)
+	gamma *= halfpower
+	if fZ <= 20 && fZ == math.Floor(fZ) {
+		gamma = math.Round(gamma)
+	}
+	return gamma
+}
+
+// getLogGamma calculates the natural logarithm of the gamma function.
+func getLogGamma(fZ float64) float64 {
+	fMaxGammaArgument := 171.624376956302
+	if fZ >= fMaxGammaArgument {
+		return getLogGammaHelper(fZ)
+	}
+	if fZ >= 1.0 {
+		return math.Log(getGammaHelper(fZ))
+	}
+	if fZ >= 0.5 {
+		return math.Log(getGammaHelper(fZ+1) / fZ)
+	}
+	return getLogGammaHelper(fZ+2) - math.Log(fZ+1) - math.Log(fZ)
+}
+
+// getLowRegIGamma returns lower regularized incomplete gamma function.
+func getLowRegIGamma(fA, fX float64) float64 {
+	fLnFactor := fA*math.Log(fX) - fX - getLogGamma(fA)
+	fFactor := math.Exp(fLnFactor)
+	if fX > fA+1 {
+		return 1 - fFactor*getGammaContFraction(fA, fX)
+	}
+	return fFactor * getGammaSeries(fA, fX)
+}
+
+// getChiSqDistCDF returns left tail for the Chi-Square distribution.
+func getChiSqDistCDF(fX, fDF float64) float64 {
+	if fX <= 0 {
+		return 0
+	}
+	return getLowRegIGamma(fDF/2, fX/2)
+}
+
+// getChiSqDistPDF calculates the probability density function for the
+// Chi-Square distribution.
+func getChiSqDistPDF(fX, fDF float64) float64 {
+	if fDF*fX > 1391000 {
+		return math.Exp((0.5*fDF-1)*math.Log(fX*0.5) - 0.5*fX - math.Log(2) - getLogGamma(0.5*fDF))
+	}
+	var fCount, fValue float64
+	if math.Mod(fDF, 2) < 0.5 {
+		fValue = 0.5
+		fCount = 2
+	} else {
+		fValue = 1 / math.Sqrt(fX*2*math.Pi)
+		fCount = 1
+	}
+	for fCount < fDF {
+		fValue *= fX / fCount
+		fCount += 2
+	}
+	if fX >= 1425 {
+		fValue = math.Exp(math.Log(fValue) - fX/2)
+	} else {
+		fValue *= math.Exp(-fX / 2)
+	}
+	return fValue
+}
+
+// CHISQdotDIST function calculates the Probability Density Function or the
+// Cumulative Distribution Function for the Chi-Square Distribution. The
+// syntax of the function is:
+//
+//    CHISQ.DIST(x,degrees_freedom,cumulative)
+//
+func (fn *formulaFuncs) CHISQdotDIST(argsList *list.List) formulaArg {
+	if argsList.Len() != 3 {
+		return newErrorFormulaArg(formulaErrorVALUE, "CHISQ.DIST requires 3 arguments")
+	}
+	var x, degrees, cumulative formulaArg
+	if x = argsList.Front().Value.(formulaArg).ToNumber(); x.Type != ArgNumber {
+		return x
+	}
+	if degrees = argsList.Front().Next().Value.(formulaArg).ToNumber(); degrees.Type != ArgNumber {
+		return degrees
+	}
+	if cumulative = argsList.Back().Value.(formulaArg).ToBool(); cumulative.Type == ArgError {
+		return cumulative
+	}
+	if x.Number < 0 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	maxDeg := math.Pow10(10)
+	if degrees.Number < 1 || degrees.Number >= maxDeg {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	if cumulative.Number == 1 {
+		return newNumberFormulaArg(getChiSqDistCDF(x.Number, degrees.Number))
+	}
+	return newNumberFormulaArg(getChiSqDistPDF(x.Number, degrees.Number))
+}
+
+// CHISQdotDISTdotRT function calculates the right-tailed probability of the
+// Chi-Square Distribution. The syntax of the function is:
+//
+//    CHISQ.DIST.RT(x,degrees_freedom)
+//
+func (fn *formulaFuncs) CHISQdotDISTdotRT(argsList *list.List) formulaArg {
+	if argsList.Len() != 2 {
+		return newErrorFormulaArg(formulaErrorVALUE, "CHISQ.DIST.RT requires 2 numeric arguments")
+	}
+	return fn.CHIDIST(argsList)
+}
+
+// CHISQdotTEST function performs the chi-square test on two supplied data sets
+// (of observed and expected frequencies), and returns the probability that
+// the differences between the sets are simply due to sampling error. The
+// syntax of the function is:
+//
+//    CHISQ.TEST(actual_range,expected_range)
+//
+func (fn *formulaFuncs) CHISQdotTEST(argsList *list.List) formulaArg {
+	if argsList.Len() != 2 {
+		return newErrorFormulaArg(formulaErrorVALUE, "CHISQ.TEST requires 2 arguments")
+	}
+	return fn.CHITEST(argsList)
+}
+
+// hasChangeOfSign check if the sign has been changed.
+func hasChangeOfSign(u, w float64) bool {
+	return (u < 0 && w > 0) || (u > 0 && w < 0)
+}
+
+// calcInverseIterator directly maps the required parameters for inverse
+// distribution functions.
+type calcInverseIterator struct {
+	name        string
+	fp, fDF, nT float64
+}
+
+// callBack implements the callback function for the inverse iterator.
+func (iterator *calcInverseIterator) callBack(x float64) float64 {
+	if iterator.name == "CHISQ.INV" {
+		return iterator.fp - getChiSqDistCDF(x, iterator.fDF)
+	}
+	return iterator.fp - getTDist(x, iterator.fDF, iterator.nT)
+}
+
+// inverseQuadraticInterpolation inverse quadratic interpolation with
+// additional brackets.
+func inverseQuadraticInterpolation(iterator calcInverseIterator, fAx, fAy, fBx, fBy float64) float64 {
+	fYEps := 1.0e-307
+	fXEps := 2.22045e-016
+	fPx, fPy, fQx, fQy, fRx, fRy := fAx, fAy, fBx, fBy, fAx, fAy
+	fSx := 0.5 * (fAx + fBx)
+	bHasToInterpolate := true
+	nCount := 0
+	for nCount < 500 && math.Abs(fRy) > fYEps && (fBx-fAx) > math.Max(math.Abs(fAx), math.Abs(fBx))*fXEps {
+		if bHasToInterpolate {
+			if fPy != fQy && fQy != fRy && fRy != fPy {
+				fSx = fPx*fRy*fQy/(fRy-fPy)/(fQy-fPy) + fRx*fQy*fPy/(fQy-fRy)/(fPy-fRy) +
+					fQx*fPy*fRy/(fPy-fQy)/(fRy-fQy)
+				bHasToInterpolate = (fAx < fSx) && (fSx < fBx)
+			} else {
+				bHasToInterpolate = false
+			}
+		}
+		if !bHasToInterpolate {
+			fSx = 0.5 * (fAx + fBx)
+			fQx, fQy = fBx, fBy
+			bHasToInterpolate = true
+		}
+		fPx, fQx, fRx, fPy, fQy = fQx, fRx, fSx, fQy, fRy
+		fRy = iterator.callBack(fSx)
+		if hasChangeOfSign(fAy, fRy) {
+			fBx, fBy = fRx, fRy
+		} else {
+			fAx, fAy = fRx, fRy
+		}
+		bHasToInterpolate = bHasToInterpolate && (math.Abs(fRy)*2 <= math.Abs(fQy))
+		nCount++
+	}
+	return fRx
+}
+
+// calcIterateInverse function calculates the iteration for inverse
+// distributions.
+func calcIterateInverse(iterator calcInverseIterator, fAx, fBx float64) float64 {
+	fAy, fBy := iterator.callBack(fAx), iterator.callBack(fBx)
+	var fTemp float64
+	var nCount int
+	for nCount = 0; nCount < 1000 && !hasChangeOfSign(fAy, fBy); nCount++ {
+		if math.Abs(fAy) <= math.Abs(fBy) {
+			fTemp = fAx
+			fAx += 2 * (fAx - fBx)
+			if fAx < 0 {
+				fAx = 0
+			}
+			fBx = fTemp
+			fBy = fAy
+			fAy = iterator.callBack(fAx)
+		} else {
+			fTemp = fBx
+			fBx += 2 * (fBx - fAx)
+			fAx = fTemp
+			fAy = fBy
+			fBy = iterator.callBack(fBx)
+		}
+	}
+	if fAy == 0 || fBy == 0 {
+		return 0
+	}
+	return inverseQuadraticInterpolation(iterator, fAx, fAy, fBx, fBy)
+}
+
+// CHISQdotINV function calculates the inverse of the left-tailed probability
+// of the Chi-Square Distribution. The syntax of the function is:
+//
+//    CHISQ.INV(probability,degrees_freedom)
+//
+func (fn *formulaFuncs) CHISQdotINV(argsList *list.List) formulaArg {
+	if argsList.Len() != 2 {
+		return newErrorFormulaArg(formulaErrorVALUE, "CHISQ.INV requires 2 numeric arguments")
+	}
+	var probability, degrees formulaArg
+	if probability = argsList.Front().Value.(formulaArg).ToNumber(); probability.Type != ArgNumber {
+		return probability
+	}
+	if degrees = argsList.Back().Value.(formulaArg).ToNumber(); degrees.Type != ArgNumber {
+		return degrees
+	}
+	if probability.Number < 0 || probability.Number >= 1 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	if degrees.Number < 1 || degrees.Number > math.Pow10(10) {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	return newNumberFormulaArg(calcIterateInverse(calcInverseIterator{
+		name: "CHISQ.INV",
+		fp:   probability.Number,
+		fDF:  degrees.Number,
+	}, degrees.Number/2, degrees.Number))
+}
+
+// CHISQdotINVdotRT function calculates the inverse of the right-tailed
+// probability of the Chi-Square Distribution. The syntax of the function is:
+//
+//    CHISQ.INV.RT(probability,degrees_freedom)
+//
+func (fn *formulaFuncs) CHISQdotINVdotRT(argsList *list.List) formulaArg {
+	if argsList.Len() != 2 {
+		return newErrorFormulaArg(formulaErrorVALUE, "CHISQ.INV.RT requires 2 numeric arguments")
+	}
+	return fn.CHIINV(argsList)
 }
 
 // confidence is an implementation of the formula functions CONFIDENCE and
@@ -5630,7 +6787,7 @@ func (fn *formulaFuncs) confidence(name string, argsList *list.List) formulaArg 
 
 // CONFIDENCE function uses a Normal Distribution to calculate a confidence
 // value that can be used to construct the Confidence Interval for a
-// population mean, for a supplied probablity and sample size. It is assumed
+// population mean, for a supplied probability and sample size. It is assumed
 // that the standard deviation of the population is known. The syntax of the
 // function is:
 //
@@ -5642,7 +6799,7 @@ func (fn *formulaFuncs) CONFIDENCE(argsList *list.List) formulaArg {
 
 // CONFIDENCEdotNORM function uses a Normal Distribution to calculate a
 // confidence value that can be used to construct the confidence interval for
-// a population mean, for a supplied probablity and sample size. It is
+// a population mean, for a supplied probability and sample size. It is
 // assumed that the standard deviation of the population is known. The syntax
 // of the Confidence.Norm function is:
 //
@@ -5883,7 +7040,7 @@ func (fn *formulaFuncs) COUNTIF(argsList *list.List) formulaArg {
 // formulaIfsMatch function returns cells reference array which match criteria.
 func formulaIfsMatch(args []formulaArg) (cellRefs []cellRef) {
 	for i := 0; i < len(args)-1; i += 2 {
-		match := []cellRef{}
+		var match []cellRef
 		matrix, criteria := args[i].Matrix, formulaCriteriaParser(args[i+1].Value())
 		if i == 0 {
 			for rowIdx, row := range matrix {
@@ -5921,11 +7078,26 @@ func (fn *formulaFuncs) COUNTIFS(argsList *list.List) formulaArg {
 	if argsList.Len()%2 != 0 {
 		return newErrorFormulaArg(formulaErrorNA, formulaErrorNA)
 	}
-	args := []formulaArg{}
+	var args []formulaArg
 	for arg := argsList.Front(); arg != nil; arg = arg.Next() {
 		args = append(args, arg.Value.(formulaArg))
 	}
 	return newNumberFormulaArg(float64(len(formulaIfsMatch(args))))
+}
+
+// CRITBINOM function returns the inverse of the Cumulative Binomial
+// Distribution. I.e. for a specific number of independent trials, the
+// function returns the smallest value (number of successes) for which the
+// cumulative binomial distribution is greater than or equal to a specified
+// value. The syntax of the function is:
+//
+//    CRITBINOM(trials,probability_s,alpha)
+//
+func (fn *formulaFuncs) CRITBINOM(argsList *list.List) formulaArg {
+	if argsList.Len() != 3 {
+		return newErrorFormulaArg(formulaErrorVALUE, "CRITBINOM requires 3 numeric arguments")
+	}
+	return fn.BINOMdotINV(argsList)
 }
 
 // DEVSQ function calculates the sum of the squared deviations from the sample
@@ -6036,6 +7208,123 @@ func (fn *formulaFuncs) GAMMA(argsList *list.List) formulaArg {
 	return newErrorFormulaArg(formulaErrorVALUE, "GAMMA requires 1 numeric argument")
 }
 
+// GAMMAdotDIST function returns the Gamma Distribution, which is frequently
+// used to provide probabilities for values that may have a skewed
+// distribution, such as queuing analysis.
+//
+//    GAMMA.DIST(x,alpha,beta,cumulative)
+//
+func (fn *formulaFuncs) GAMMAdotDIST(argsList *list.List) formulaArg {
+	if argsList.Len() != 4 {
+		return newErrorFormulaArg(formulaErrorVALUE, "GAMMA.DIST requires 4 arguments")
+	}
+	return fn.GAMMADIST(argsList)
+}
+
+// GAMMADIST function returns the Gamma Distribution, which is frequently used
+// to provide probabilities for values that may have a skewed distribution,
+// such as queuing analysis.
+//
+//    GAMMADIST(x,alpha,beta,cumulative)
+//
+func (fn *formulaFuncs) GAMMADIST(argsList *list.List) formulaArg {
+	if argsList.Len() != 4 {
+		return newErrorFormulaArg(formulaErrorVALUE, "GAMMADIST requires 4 arguments")
+	}
+	var x, alpha, beta, cumulative formulaArg
+	if x = argsList.Front().Value.(formulaArg).ToNumber(); x.Type != ArgNumber {
+		return x
+	}
+	if x.Number < 0 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	if alpha = argsList.Front().Next().Value.(formulaArg).ToNumber(); alpha.Type != ArgNumber {
+		return alpha
+	}
+	if beta = argsList.Back().Prev().Value.(formulaArg).ToNumber(); beta.Type != ArgNumber {
+		return beta
+	}
+	if alpha.Number <= 0 || beta.Number <= 0 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	if cumulative = argsList.Back().Value.(formulaArg).ToBool(); cumulative.Type == ArgError {
+		return cumulative
+	}
+	if cumulative.Number == 1 {
+		return newNumberFormulaArg(incompleteGamma(alpha.Number, x.Number/beta.Number) / math.Gamma(alpha.Number))
+	}
+	return newNumberFormulaArg((1 / (math.Pow(beta.Number, alpha.Number) * math.Gamma(alpha.Number))) * math.Pow(x.Number, alpha.Number-1) * math.Exp(0-(x.Number/beta.Number)))
+}
+
+// gammainv returns the inverse of the Gamma distribution for the specified
+// value.
+func gammainv(probability, alpha, beta float64) float64 {
+	xLo, xHi := 0.0, alpha*beta*5
+	dx, x, xNew, result := 1024.0, 1.0, 1.0, 0.0
+	for i := 0; math.Abs(dx) > 8.88e-016 && i <= 256; i++ {
+		result = incompleteGamma(alpha, x/beta) / math.Gamma(alpha)
+		e := result - probability
+		if e == 0 {
+			dx = 0
+		} else if e < 0 {
+			xLo = x
+		} else {
+			xHi = x
+		}
+		pdf := (1 / (math.Pow(beta, alpha) * math.Gamma(alpha))) * math.Pow(x, alpha-1) * math.Exp(0-(x/beta))
+		if pdf != 0 {
+			dx = e / pdf
+			xNew = x - dx
+		}
+		if xNew < xLo || xNew > xHi || pdf == 0 {
+			xNew = (xLo + xHi) / 2
+			dx = xNew - x
+		}
+		x = xNew
+	}
+	return x
+}
+
+// GAMMAdotINV function returns the inverse of the Gamma Cumulative
+// Distribution. The syntax of the function is:
+//
+//    GAMMA.INV(probability,alpha,beta)
+//
+func (fn *formulaFuncs) GAMMAdotINV(argsList *list.List) formulaArg {
+	if argsList.Len() != 3 {
+		return newErrorFormulaArg(formulaErrorVALUE, "GAMMA.INV requires 3 arguments")
+	}
+	return fn.GAMMAINV(argsList)
+}
+
+// GAMMAINV function returns the inverse of the Gamma Cumulative Distribution.
+// The syntax of the function is:
+//
+//    GAMMAINV(probability,alpha,beta)
+//
+func (fn *formulaFuncs) GAMMAINV(argsList *list.List) formulaArg {
+	if argsList.Len() != 3 {
+		return newErrorFormulaArg(formulaErrorVALUE, "GAMMAINV requires 3 arguments")
+	}
+	var probability, alpha, beta formulaArg
+	if probability = argsList.Front().Value.(formulaArg).ToNumber(); probability.Type != ArgNumber {
+		return probability
+	}
+	if probability.Number < 0 || probability.Number >= 1 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	if alpha = argsList.Front().Next().Value.(formulaArg).ToNumber(); alpha.Type != ArgNumber {
+		return alpha
+	}
+	if beta = argsList.Back().Value.(formulaArg).ToNumber(); beta.Type != ArgNumber {
+		return beta
+	}
+	if alpha.Number <= 0 || beta.Number <= 0 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	return newNumberFormulaArg(gammainv(probability.Number, alpha.Number, beta.Number))
+}
+
 // GAMMALN function returns the natural logarithm of the Gamma Function, Γ
 // (n). The syntax of the function is:
 //
@@ -6064,6 +7353,47 @@ func (fn *formulaFuncs) GAMMALN(argsList *list.List) formulaArg {
 	return newErrorFormulaArg(formulaErrorVALUE, "GAMMALN requires 1 numeric argument")
 }
 
+// GAMMALNdotPRECISE function returns the natural logarithm of the Gamma
+// Function, Γ(n). The syntax of the function is:
+//
+//    GAMMALN.PRECISE(x)
+//
+func (fn *formulaFuncs) GAMMALNdotPRECISE(argsList *list.List) formulaArg {
+	if argsList.Len() != 1 {
+		return newErrorFormulaArg(formulaErrorVALUE, "GAMMALN.PRECISE requires 1 numeric argument")
+	}
+	x := argsList.Front().Value.(formulaArg).ToNumber()
+	if x.Type != ArgNumber {
+		return x
+	}
+	if x.Number <= 0 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	return newNumberFormulaArg(getLogGamma(x.Number))
+}
+
+// GAUSS function returns the probability that a member of a standard normal
+// population will fall between the mean and a specified number of standard
+// deviations from the mean. The syntax of the function is:
+//
+//    GAUSS(z)
+//
+func (fn *formulaFuncs) GAUSS(argsList *list.List) formulaArg {
+	if argsList.Len() != 1 {
+		return newErrorFormulaArg(formulaErrorVALUE, "GAUSS requires 1 numeric argument")
+	}
+	args := list.New().Init()
+	args.PushBack(argsList.Front().Value.(formulaArg))
+	args.PushBack(formulaArg{Type: ArgNumber, Number: 0})
+	args.PushBack(formulaArg{Type: ArgNumber, Number: 1})
+	args.PushBack(newBoolFormulaArg(true))
+	normdist := fn.NORMDIST(args)
+	if normdist.Type != ArgNumber {
+		return normdist
+	}
+	return newNumberFormulaArg(normdist.Number - 0.5)
+}
+
 // GEOMEAN function calculates the geometric mean of a supplied set of values.
 // The syntax of the function is:
 //
@@ -6080,7 +7410,7 @@ func (fn *formulaFuncs) GEOMEAN(argsList *list.List) formulaArg {
 	count := fn.COUNT(argsList)
 	min := fn.MIN(argsList)
 	if product.Number > 0 && min.Number > 0 {
-		return newNumberFormulaArg(math.Pow(product.Number, (1 / count.Number)))
+		return newNumberFormulaArg(math.Pow(product.Number, 1/count.Number))
 	}
 	return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 }
@@ -6113,10 +7443,100 @@ func (fn *formulaFuncs) HARMEAN(argsList *list.List) formulaArg {
 		if number <= 0 {
 			return newErrorFormulaArg(formulaErrorNA, formulaErrorNA)
 		}
-		val += (1 / number)
+		val += 1 / number
 		cnt++
 	}
 	return newNumberFormulaArg(1 / (val / cnt))
+}
+
+// checkHYPGEOMDISTArgs checking arguments for the formula function HYPGEOMDIST
+// and HYPGEOM.DIST.
+func checkHYPGEOMDISTArgs(sampleS, numberSample, populationS, numberPop formulaArg) bool {
+	return sampleS.Number < 0 ||
+		sampleS.Number > math.Min(numberSample.Number, populationS.Number) ||
+		sampleS.Number < math.Max(0, numberSample.Number-numberPop.Number+populationS.Number) ||
+		numberSample.Number <= 0 ||
+		numberSample.Number > numberPop.Number ||
+		populationS.Number <= 0 ||
+		populationS.Number > numberPop.Number ||
+		numberPop.Number <= 0
+}
+
+// prepareHYPGEOMDISTArgs prepare arguments for the formula function
+// HYPGEOMDIST and HYPGEOM.DIST.
+func (fn *formulaFuncs) prepareHYPGEOMDISTArgs(name string, argsList *list.List) formulaArg {
+	if name == "HYPGEOMDIST" && argsList.Len() != 4 {
+		return newErrorFormulaArg(formulaErrorVALUE, "HYPGEOMDIST requires 4 numeric arguments")
+	}
+	if name == "HYPGEOM.DIST" && argsList.Len() != 5 {
+		return newErrorFormulaArg(formulaErrorVALUE, "HYPGEOM.DIST requires 5 arguments")
+	}
+	var sampleS, numberSample, populationS, numberPop, cumulative formulaArg
+	if sampleS = argsList.Front().Value.(formulaArg).ToNumber(); sampleS.Type != ArgNumber {
+		return sampleS
+	}
+	if numberSample = argsList.Front().Next().Value.(formulaArg).ToNumber(); numberSample.Type != ArgNumber {
+		return numberSample
+	}
+	if populationS = argsList.Front().Next().Next().Value.(formulaArg).ToNumber(); populationS.Type != ArgNumber {
+		return populationS
+	}
+	if numberPop = argsList.Front().Next().Next().Next().Value.(formulaArg).ToNumber(); numberPop.Type != ArgNumber {
+		return numberPop
+	}
+	if checkHYPGEOMDISTArgs(sampleS, numberSample, populationS, numberPop) {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	if name == "HYPGEOM.DIST" {
+		if cumulative = argsList.Back().Value.(formulaArg).ToBool(); cumulative.Type != ArgNumber {
+			return cumulative
+		}
+	}
+	return newListFormulaArg([]formulaArg{sampleS, numberSample, populationS, numberPop, cumulative})
+}
+
+// HYPGEOMdotDIST function returns the value of the hypergeometric distribution
+// for a specified number of successes from a population sample. The function
+// can calculate the cumulative distribution or the probability density
+// function. The syntax of the function is:
+//
+//    HYPGEOM.DIST(sample_s,number_sample,population_s,number_pop,cumulative)
+//
+func (fn *formulaFuncs) HYPGEOMdotDIST(argsList *list.List) formulaArg {
+	args := fn.prepareHYPGEOMDISTArgs("HYPGEOM.DIST", argsList)
+	if args.Type != ArgList {
+		return args
+	}
+	sampleS, numberSample, populationS, numberPop, cumulative := args.List[0], args.List[1], args.List[2], args.List[3], args.List[4]
+	if cumulative.Number == 1 {
+		var res float64
+		for i := 0; i <= int(sampleS.Number); i++ {
+			res += binomCoeff(populationS.Number, float64(i)) *
+				binomCoeff(numberPop.Number-populationS.Number, numberSample.Number-float64(i)) /
+				binomCoeff(numberPop.Number, numberSample.Number)
+		}
+		return newNumberFormulaArg(res)
+	}
+	return newNumberFormulaArg(binomCoeff(populationS.Number, sampleS.Number) *
+		binomCoeff(numberPop.Number-populationS.Number, numberSample.Number-sampleS.Number) /
+		binomCoeff(numberPop.Number, numberSample.Number))
+}
+
+// HYPGEOMDIST function returns the value of the hypergeometric distribution
+// for a given number of successes from a sample of a population. The syntax
+// of the function is:
+//
+//    HYPGEOMDIST(sample_s,number_sample,population_s,number_pop)
+//
+func (fn *formulaFuncs) HYPGEOMDIST(argsList *list.List) formulaArg {
+	args := fn.prepareHYPGEOMDISTArgs("HYPGEOMDIST", argsList)
+	if args.Type != ArgList {
+		return args
+	}
+	sampleS, numberSample, populationS, numberPop := args.List[0], args.List[1], args.List[2], args.List[3]
+	return newNumberFormulaArg(binomCoeff(populationS.Number, sampleS.Number) *
+		binomCoeff(numberPop.Number-populationS.Number, numberSample.Number-sampleS.Number) /
+		binomCoeff(numberPop.Number, numberSample.Number))
 }
 
 // KURT function calculates the kurtosis of a supplied set of values. The
@@ -6208,8 +7628,101 @@ func (fn *formulaFuncs) EXPONDIST(argsList *list.List) formulaArg {
 	return newNumberFormulaArg(lambda.Number * math.Exp(-lambda.Number*x.Number))
 }
 
-// finv is an implementation of the formula functions F.INV.RT and FINV.
-func (fn *formulaFuncs) finv(name string, argsList *list.List) formulaArg {
+// FdotDIST function calculates the Probability Density Function or the
+// Cumulative Distribution Function for the F Distribution. This function is
+// frequently used to measure the degree of diversity between two data
+// sets. The syntax of the function is:
+//
+//    F.DIST(x,deg_freedom1,deg_freedom2,cumulative)
+//
+func (fn *formulaFuncs) FdotDIST(argsList *list.List) formulaArg {
+	if argsList.Len() != 4 {
+		return newErrorFormulaArg(formulaErrorVALUE, "F.DIST requires 4 arguments")
+	}
+	var x, deg1, deg2, cumulative formulaArg
+	if x = argsList.Front().Value.(formulaArg).ToNumber(); x.Type != ArgNumber {
+		return x
+	}
+	if deg1 = argsList.Front().Next().Value.(formulaArg).ToNumber(); deg1.Type != ArgNumber {
+		return deg1
+	}
+	if deg2 = argsList.Front().Next().Next().Value.(formulaArg).ToNumber(); deg2.Type != ArgNumber {
+		return deg2
+	}
+	if cumulative = argsList.Back().Value.(formulaArg).ToBool(); cumulative.Type == ArgError {
+		return cumulative
+	}
+	if x.Number < 0 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	maxDeg := math.Pow10(10)
+	if deg1.Number < 1 || deg1.Number >= maxDeg {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	if deg2.Number < 1 || deg2.Number >= maxDeg {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	if cumulative.Number == 1 {
+		return newNumberFormulaArg(1 - getBetaDist(deg2.Number/(deg2.Number+deg1.Number*x.Number), deg2.Number/2, deg1.Number/2))
+	}
+	return newNumberFormulaArg(math.Gamma((deg2.Number+deg1.Number)/2) / (math.Gamma(deg1.Number/2) * math.Gamma(deg2.Number/2)) * math.Pow(deg1.Number/deg2.Number, deg1.Number/2) * (math.Pow(x.Number, (deg1.Number-2)/2) / math.Pow(1+(deg1.Number/deg2.Number)*x.Number, (deg1.Number+deg2.Number)/2)))
+}
+
+// FDIST function calculates the (right-tailed) F Probability Distribution,
+// which measures the degree of diversity between two data sets. The syntax
+// of the function is:
+//
+//    FDIST(x,deg_freedom1,deg_freedom2)
+//
+func (fn *formulaFuncs) FDIST(argsList *list.List) formulaArg {
+	if argsList.Len() != 3 {
+		return newErrorFormulaArg(formulaErrorVALUE, "FDIST requires 3 arguments")
+	}
+	var x, deg1, deg2 formulaArg
+	if x = argsList.Front().Value.(formulaArg).ToNumber(); x.Type != ArgNumber {
+		return x
+	}
+	if deg1 = argsList.Front().Next().Value.(formulaArg).ToNumber(); deg1.Type != ArgNumber {
+		return deg1
+	}
+	if deg2 = argsList.Back().Value.(formulaArg).ToNumber(); deg2.Type != ArgNumber {
+		return deg2
+	}
+	if x.Number < 0 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	maxDeg := math.Pow10(10)
+	if deg1.Number < 1 || deg1.Number >= maxDeg {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	if deg2.Number < 1 || deg2.Number >= maxDeg {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	args := list.New()
+	args.PushBack(newNumberFormulaArg(deg1.Number * x.Number / (deg1.Number*x.Number + deg2.Number)))
+	args.PushBack(newNumberFormulaArg(0.5 * deg1.Number))
+	args.PushBack(newNumberFormulaArg(0.5 * deg2.Number))
+	args.PushBack(newNumberFormulaArg(0))
+	args.PushBack(newNumberFormulaArg(1))
+	return newNumberFormulaArg(1 - fn.BETADIST(args).Number)
+}
+
+// FdotDISTdotRT function calculates the (right-tailed) F Probability
+// Distribution, which measures the degree of diversity between two data sets.
+// The syntax of the function is:
+//
+//   F.DIST.RT(x,deg_freedom1,deg_freedom2)
+//
+func (fn *formulaFuncs) FdotDISTdotRT(argsList *list.List) formulaArg {
+	if argsList.Len() != 3 {
+		return newErrorFormulaArg(formulaErrorVALUE, "F.DIST.RT requires 3 arguments")
+	}
+	return fn.FDIST(argsList)
+}
+
+// prepareFinvArgs checking and prepare arguments for the formula function
+// F.INV, F.INV.RT and FINV.
+func (fn *formulaFuncs) prepareFinvArgs(name string, argsList *list.List) formulaArg {
 	if argsList.Len() != 3 {
 		return newErrorFormulaArg(formulaErrorVALUE, fmt.Sprintf("%s requires 3 arguments", name))
 	}
@@ -6232,7 +7745,21 @@ func (fn *formulaFuncs) finv(name string, argsList *list.List) formulaArg {
 	if d2.Number < 1 || d2.Number >= math.Pow10(10) {
 		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 	}
-	return newNumberFormulaArg((1/calcBetainv(1.0-(1.0-probability.Number), d2.Number/2, d1.Number/2, 0, 1) - 1.0) * (d2.Number / d1.Number))
+	return newListFormulaArg([]formulaArg{probability, d1, d2})
+}
+
+// FdotINV function calculates the inverse of the Cumulative F Distribution
+// for a supplied probability. The syntax of the F.Inv function is:
+//
+//    F.INV(probability,deg_freedom1,deg_freedom2)
+//
+func (fn *formulaFuncs) FdotINV(argsList *list.List) formulaArg {
+	args := fn.prepareFinvArgs("F.INV", argsList)
+	if args.Type != ArgList {
+		return args
+	}
+	probability, d1, d2 := args.List[0], args.List[1], args.List[2]
+	return newNumberFormulaArg((1/calcBetainv(1-probability.Number, d2.Number/2, d1.Number/2, 0, 1) - 1) * (d2.Number / d1.Number))
 }
 
 // FdotINVdotRT function calculates the inverse of the (right-tailed) F
@@ -6242,7 +7769,12 @@ func (fn *formulaFuncs) finv(name string, argsList *list.List) formulaArg {
 //    F.INV.RT(probability,deg_freedom1,deg_freedom2)
 //
 func (fn *formulaFuncs) FdotINVdotRT(argsList *list.List) formulaArg {
-	return fn.finv("F.INV.RT", argsList)
+	args := fn.prepareFinvArgs("F.INV.RT", argsList)
+	if args.Type != ArgList {
+		return args
+	}
+	probability, d1, d2 := args.List[0], args.List[1], args.List[2]
+	return newNumberFormulaArg((1/calcBetainv(1-(1-probability.Number), d2.Number/2, d1.Number/2, 0, 1) - 1) * (d2.Number / d1.Number))
 }
 
 // FINV function calculates the inverse of the (right-tailed) F Probability
@@ -6251,7 +7783,256 @@ func (fn *formulaFuncs) FdotINVdotRT(argsList *list.List) formulaArg {
 //    FINV(probability,deg_freedom1,deg_freedom2)
 //
 func (fn *formulaFuncs) FINV(argsList *list.List) formulaArg {
-	return fn.finv("FINV", argsList)
+	args := fn.prepareFinvArgs("FINV", argsList)
+	if args.Type != ArgList {
+		return args
+	}
+	probability, d1, d2 := args.List[0], args.List[1], args.List[2]
+	return newNumberFormulaArg((1/calcBetainv(1-(1-probability.Number), d2.Number/2, d1.Number/2, 0, 1) - 1) * (d2.Number / d1.Number))
+}
+
+// FdotTEST function returns the F-Test for two supplied arrays. I.e. the
+// function returns the two-tailed probability that the variances in the two
+// supplied arrays are not significantly different. The syntax of the Ftest
+// function is:
+//
+//    F.TEST(array1,array2)
+//
+func (fn *formulaFuncs) FdotTEST(argsList *list.List) formulaArg {
+	if argsList.Len() != 2 {
+		return newErrorFormulaArg(formulaErrorVALUE, "F.TEST requires 2 arguments")
+	}
+	array1 := argsList.Front().Value.(formulaArg)
+	array2 := argsList.Back().Value.(formulaArg)
+	left, right := array1.ToList(), array2.ToList()
+	collectMatrix := func(args []formulaArg) (n, accu float64) {
+		var p, sum float64
+		for _, arg := range args {
+			if num := arg.ToNumber(); num.Type == ArgNumber {
+				x := num.Number - p
+				y := x / (n + 1)
+				p += y
+				accu += n * x * y
+				n++
+				sum += num.Number
+			}
+		}
+		return
+	}
+	nums, accu := collectMatrix(left)
+	f3 := nums - 1
+	if nums == 1 {
+		return newErrorFormulaArg(formulaErrorDIV, formulaErrorDIV)
+	}
+	f1 := accu / (nums - 1)
+	if f1 == 0 {
+		return newErrorFormulaArg(formulaErrorDIV, formulaErrorDIV)
+	}
+	nums, accu = collectMatrix(right)
+	f4 := nums - 1
+	if nums == 1 {
+		return newErrorFormulaArg(formulaErrorDIV, formulaErrorDIV)
+	}
+	f2 := accu / (nums - 1)
+	if f2 == 0 {
+		return newErrorFormulaArg(formulaErrorDIV, formulaErrorDIV)
+	}
+	args := list.New()
+	args.PushBack(newNumberFormulaArg(f1 / f2))
+	args.PushBack(newNumberFormulaArg(f3))
+	args.PushBack(newNumberFormulaArg(f4))
+	probability := (1 - fn.FDIST(args).Number) * 2
+	if probability > 1 {
+		probability = 2 - probability
+	}
+	return newNumberFormulaArg(probability)
+}
+
+// FTEST function returns the F-Test for two supplied arrays. I.e. the function
+// returns the two-tailed probability that the variances in the two supplied
+// arrays are not significantly different. The syntax of the Ftest function
+// is:
+//
+//    FTEST(array1,array2)
+//
+func (fn *formulaFuncs) FTEST(argsList *list.List) formulaArg {
+	if argsList.Len() != 2 {
+		return newErrorFormulaArg(formulaErrorVALUE, "FTEST requires 2 arguments")
+	}
+	return fn.FdotTEST(argsList)
+}
+
+// LOGINV function calculates the inverse of the Cumulative Log-Normal
+// Distribution Function of x, for a supplied probability. The syntax of the
+// function is:
+//
+//    LOGINV(probability,mean,standard_dev)
+//
+func (fn *formulaFuncs) LOGINV(argsList *list.List) formulaArg {
+	if argsList.Len() != 3 {
+		return newErrorFormulaArg(formulaErrorVALUE, "LOGINV requires 3 arguments")
+	}
+	var probability, mean, stdDev formulaArg
+	if probability = argsList.Front().Value.(formulaArg).ToNumber(); probability.Type != ArgNumber {
+		return probability
+	}
+	if mean = argsList.Front().Next().Value.(formulaArg).ToNumber(); mean.Type != ArgNumber {
+		return mean
+	}
+	if stdDev = argsList.Back().Value.(formulaArg).ToNumber(); stdDev.Type != ArgNumber {
+		return stdDev
+	}
+	if probability.Number <= 0 || probability.Number >= 1 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	if stdDev.Number <= 0 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	args := list.New()
+	args.PushBack(probability)
+	args.PushBack(newNumberFormulaArg(0))
+	args.PushBack(newNumberFormulaArg(1))
+	norminv := fn.NORMINV(args)
+	return newNumberFormulaArg(math.Exp(mean.Number + stdDev.Number*norminv.Number))
+}
+
+// LOGNORMdotINV function calculates the inverse of the Cumulative Log-Normal
+// Distribution Function of x, for a supplied probability. The syntax of the
+// function is:
+//
+//    LOGNORM.INV(probability,mean,standard_dev)
+//
+func (fn *formulaFuncs) LOGNORMdotINV(argsList *list.List) formulaArg {
+	if argsList.Len() != 3 {
+		return newErrorFormulaArg(formulaErrorVALUE, "LOGNORM.INV requires 3 arguments")
+	}
+	return fn.LOGINV(argsList)
+}
+
+// LOGNORMdotDIST function calculates the Log-Normal Probability Density
+// Function or the Cumulative Log-Normal Distribution Function for a supplied
+// value of x. The syntax of the function is:
+//
+//    LOGNORM.DIST(x,mean,standard_dev,cumulative)
+//
+func (fn *formulaFuncs) LOGNORMdotDIST(argsList *list.List) formulaArg {
+	if argsList.Len() != 4 {
+		return newErrorFormulaArg(formulaErrorVALUE, "LOGNORM.DIST requires 4 arguments")
+	}
+	var x, mean, stdDev, cumulative formulaArg
+	if x = argsList.Front().Value.(formulaArg).ToNumber(); x.Type != ArgNumber {
+		return x
+	}
+	if mean = argsList.Front().Next().Value.(formulaArg).ToNumber(); mean.Type != ArgNumber {
+		return mean
+	}
+	if stdDev = argsList.Back().Prev().Value.(formulaArg).ToNumber(); stdDev.Type != ArgNumber {
+		return stdDev
+	}
+	if cumulative = argsList.Back().Value.(formulaArg).ToBool(); cumulative.Type == ArgError {
+		return cumulative
+	}
+	if x.Number <= 0 || stdDev.Number <= 0 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	if cumulative.Number == 1 {
+		args := list.New()
+		args.PushBack(newNumberFormulaArg((math.Log(x.Number) - mean.Number) / stdDev.Number))
+		args.PushBack(newNumberFormulaArg(0))
+		args.PushBack(newNumberFormulaArg(1))
+		args.PushBack(cumulative)
+		return fn.NORMDIST(args)
+	}
+	return newNumberFormulaArg((1 / (math.Sqrt(2*math.Pi) * stdDev.Number * x.Number)) *
+		math.Exp(0-(math.Pow(math.Log(x.Number)-mean.Number, 2)/(2*math.Pow(stdDev.Number, 2)))))
+}
+
+// LOGNORMDIST function calculates the Cumulative Log-Normal Distribution
+// Function at a supplied value of x. The syntax of the function is:
+//
+//    LOGNORMDIST(x,mean,standard_dev)
+//
+func (fn *formulaFuncs) LOGNORMDIST(argsList *list.List) formulaArg {
+	if argsList.Len() != 3 {
+		return newErrorFormulaArg(formulaErrorVALUE, "LOGNORMDIST requires 3 arguments")
+	}
+	var x, mean, stdDev formulaArg
+	if x = argsList.Front().Value.(formulaArg).ToNumber(); x.Type != ArgNumber {
+		return x
+	}
+	if mean = argsList.Front().Next().Value.(formulaArg).ToNumber(); mean.Type != ArgNumber {
+		return mean
+	}
+	if stdDev = argsList.Back().Value.(formulaArg).ToNumber(); stdDev.Type != ArgNumber {
+		return stdDev
+	}
+	if x.Number <= 0 || stdDev.Number <= 0 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	args := list.New()
+	args.PushBack(newNumberFormulaArg((math.Log(x.Number) - mean.Number) / stdDev.Number))
+	return fn.NORMSDIST(args)
+}
+
+// NEGBINOMdotDIST function calculates the probability mass function or the
+// cumulative distribution function for the Negative Binomial Distribution.
+// This gives the probability that there will be a given number of failures
+// before a required number of successes is achieved. The syntax of the
+// function is:
+//
+//    NEGBINOM.DIST(number_f,number_s,probability_s,cumulative)
+//
+func (fn *formulaFuncs) NEGBINOMdotDIST(argsList *list.List) formulaArg {
+	if argsList.Len() != 4 {
+		return newErrorFormulaArg(formulaErrorVALUE, "NEGBINOM.DIST requires 4 arguments")
+	}
+	var f, s, probability, cumulative formulaArg
+	if f = argsList.Front().Value.(formulaArg).ToNumber(); f.Type != ArgNumber {
+		return f
+	}
+	if s = argsList.Front().Next().Value.(formulaArg).ToNumber(); s.Type != ArgNumber {
+		return s
+	}
+	if probability = argsList.Front().Next().Next().Value.(formulaArg).ToNumber(); probability.Type != ArgNumber {
+		return probability
+	}
+	if cumulative = argsList.Back().Value.(formulaArg).ToBool(); cumulative.Type != ArgNumber {
+		return cumulative
+	}
+	if f.Number < 0 || s.Number < 1 || probability.Number < 0 || probability.Number > 1 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	if cumulative.Number == 1 {
+		return newNumberFormulaArg(1 - getBetaDist(1-probability.Number, f.Number+1, s.Number))
+	}
+	return newNumberFormulaArg(binomCoeff(f.Number+s.Number-1, s.Number-1) * math.Pow(probability.Number, s.Number) * math.Pow(1-probability.Number, f.Number))
+}
+
+// NEGBINOMDIST function calculates the Negative Binomial Distribution for a
+// given set of parameters. This gives the probability that there will be a
+// specified number of failures before a required number of successes is
+// achieved. The syntax of the function is:
+//
+//    NEGBINOMDIST(number_f,number_s,probability_s)
+//
+func (fn *formulaFuncs) NEGBINOMDIST(argsList *list.List) formulaArg {
+	if argsList.Len() != 3 {
+		return newErrorFormulaArg(formulaErrorVALUE, "NEGBINOMDIST requires 3 arguments")
+	}
+	var f, s, probability formulaArg
+	if f = argsList.Front().Value.(formulaArg).ToNumber(); f.Type != ArgNumber {
+		return f
+	}
+	if s = argsList.Front().Next().Value.(formulaArg).ToNumber(); s.Type != ArgNumber {
+		return s
+	}
+	if probability = argsList.Back().Value.(formulaArg).ToNumber(); probability.Type != ArgNumber {
+		return probability
+	}
+	if f.Number < 0 || s.Number < 1 || probability.Number < 0 || probability.Number > 1 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	return newNumberFormulaArg(binomCoeff(f.Number+s.Number-1, s.Number-1) * math.Pow(probability.Number, s.Number) * math.Pow(1-probability.Number, f.Number))
 }
 
 // NORMdotDIST function calculates the Normal Probability Density Function or
@@ -6444,8 +8225,12 @@ func norminv(p float64) (float64, error) {
 		// Rational approximation for central region.
 		q := p - 0.5
 		r := q * q
-		return (((((a[1]*r+a[2])*r+a[3])*r+a[4])*r+a[5])*r + a[6]) * q /
-			(((((b[1]*r+b[2])*r+b[3])*r+b[4])*r+b[5])*r + 1), nil
+		f1 := ((((a[1]*r+a[2])*r+a[3])*r+a[4])*r + a[5]) * r
+		f2 := (b[1]*r + b[2]) * r
+		f3 := ((math.Nextafter(f2, f2)+b[3])*r + b[4]) * r
+		f4 := (math.Nextafter(f3, f3) + b[5]) * r
+		return (math.Nextafter(f1, f1) + a[6]) * q /
+			(math.Nextafter(f4, f4) + 1), nil
 	} else if pHigh < p && p < 1 {
 		// Rational approximation for upper region.
 		q := math.Sqrt(-2 * math.Log(1-p))
@@ -6469,7 +8254,7 @@ func (fn *formulaFuncs) kth(name string, argsList *list.List) formulaArg {
 	if k < 1 {
 		return newErrorFormulaArg(formulaErrorNUM, "k should be > 0")
 	}
-	data := []float64{}
+	var data []float64
 	for _, arg := range array {
 		if numArg := arg.ToNumber(); numArg.Type == ArgNumber {
 			data = append(data, numArg.Number)
@@ -6533,7 +8318,8 @@ func (fn *formulaFuncs) MAXIFS(argsList *list.List) formulaArg {
 	if argsList.Len()%2 != 1 {
 		return newErrorFormulaArg(formulaErrorNA, formulaErrorNA)
 	}
-	max, maxRange, args := -math.MaxFloat64, argsList.Front().Value.(formulaArg).Matrix, []formulaArg{}
+	var args []formulaArg
+	max, maxRange := -math.MaxFloat64, argsList.Front().Value.(formulaArg).Matrix
 	for arg := argsList.Front().Next(); arg != nil; arg = arg.Next() {
 		args = append(args, arg.Value.(formulaArg))
 	}
@@ -6620,7 +8406,7 @@ func (fn *formulaFuncs) MEDIAN(argsList *list.List) formulaArg {
 	if argsList.Len() == 0 {
 		return newErrorFormulaArg(formulaErrorVALUE, "MEDIAN requires at least 1 argument")
 	}
-	values := []float64{}
+	var values []float64
 	var median, digits float64
 	var err error
 	for token := argsList.Front(); token != nil; token = token.Next() {
@@ -6696,7 +8482,8 @@ func (fn *formulaFuncs) MINIFS(argsList *list.List) formulaArg {
 	if argsList.Len()%2 != 1 {
 		return newErrorFormulaArg(formulaErrorNA, formulaErrorNA)
 	}
-	min, minRange, args := math.MaxFloat64, argsList.Front().Value.(formulaArg).Matrix, []formulaArg{}
+	var args []formulaArg
+	min, minRange := math.MaxFloat64, argsList.Front().Value.(formulaArg).Matrix
 	for arg := argsList.Front().Next(); arg != nil; arg = arg.Next() {
 		args = append(args, arg.Value.(formulaArg))
 	}
@@ -6792,7 +8579,7 @@ func (fn *formulaFuncs) PERCENTILEdotEXC(argsList *list.List) formulaArg {
 	if k.Number <= 0 || k.Number >= 1 {
 		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 	}
-	numbers := []float64{}
+	var numbers []float64
 	for _, arg := range array {
 		if arg.Type == ArgError {
 			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
@@ -6807,7 +8594,7 @@ func (fn *formulaFuncs) PERCENTILEdotEXC(argsList *list.List) formulaArg {
 	idx := k.Number * (float64(cnt) + 1)
 	base := math.Floor(idx)
 	next := base - 1
-	proportion := idx - base
+	proportion := math.Nextafter(idx, idx) - base
 	return newNumberFormulaArg(numbers[int(next)] + ((numbers[int(base)] - numbers[int(next)]) * proportion))
 }
 
@@ -6842,7 +8629,7 @@ func (fn *formulaFuncs) PERCENTILE(argsList *list.List) formulaArg {
 	if k.Number < 0 || k.Number > 1 {
 		return newErrorFormulaArg(formulaErrorNA, formulaErrorNA)
 	}
-	numbers := []float64{}
+	var numbers []float64
 	for _, arg := range array {
 		if arg.Type == ArgError {
 			return arg
@@ -6860,7 +8647,7 @@ func (fn *formulaFuncs) PERCENTILE(argsList *list.List) formulaArg {
 		return newNumberFormulaArg(numbers[int(idx)])
 	}
 	next := base + 1
-	proportion := idx - base
+	proportion := math.Nextafter(idx, idx) - base
 	return newNumberFormulaArg(numbers[int(base)] + ((numbers[int(next)] - numbers[int(base)]) * proportion))
 }
 
@@ -6875,7 +8662,7 @@ func (fn *formulaFuncs) percentrank(name string, argsList *list.List) formulaArg
 	if x.Type != ArgNumber {
 		return x
 	}
-	numbers := []float64{}
+	var numbers []float64
 	for _, arg := range array {
 		if arg.Type == ArgError {
 			return arg
@@ -6909,10 +8696,10 @@ func (fn *formulaFuncs) percentrank(name string, argsList *list.List) formulaArg
 		pos--
 		pos += (x.Number - numbers[int(pos)]) / (cmp - numbers[int(pos)])
 	}
-	pow := math.Pow(10, float64(significance.Number))
-	digit := pow * float64(pos) / (float64(cnt) - 1)
+	pow := math.Pow(10, significance.Number)
+	digit := pow * pos / (float64(cnt) - 1)
 	if name == "PERCENTRANK.EXC" {
-		digit = pow * float64(pos+1) / (float64(cnt) + 1)
+		digit = pow * (pos + 1) / (float64(cnt) + 1)
 	}
 	return newNumberFormulaArg(math.Floor(digit) / pow)
 }
@@ -7063,7 +8850,7 @@ func (fn *formulaFuncs) rank(name string, argsList *list.List) formulaArg {
 	if num.Type != ArgNumber {
 		return num
 	}
-	arr := []float64{}
+	var arr []float64
 	for _, arg := range argsList.Front().Next().Value.(formulaArg).ToList() {
 		n := arg.ToNumber()
 		if n.Type == ArgNumber {
@@ -7086,7 +8873,7 @@ func (fn *formulaFuncs) rank(name string, argsList *list.List) formulaArg {
 	return newErrorFormulaArg(formulaErrorNA, formulaErrorNA)
 }
 
-// RANK.EQ function returns the statistical rank of a given value, within a
+// RANKdotEQ function returns the statistical rank of a given value, within a
 // supplied array of values. If there are duplicate values in the list, these
 // are given the same rank. The syntax of the function is:
 //
@@ -7210,6 +8997,351 @@ func (fn *formulaFuncs) STDEVdotP(argsList *list.List) formulaArg {
 	return fn.stdevp("STDEV.P", argsList)
 }
 
+// getTDist is an implementation for the beta distribution probability density
+// function.
+func getTDist(T, fDF, nType float64) float64 {
+	var res float64
+	switch nType {
+	case 1:
+		res = 0.5 * getBetaDist(fDF/(fDF+T*T), fDF/2, 0.5)
+		break
+	case 2:
+		res = getBetaDist(fDF/(fDF+T*T), fDF/2, 0.5)
+		break
+	case 3:
+		res = math.Pow(1+(T*T/fDF), -(fDF+1)/2) / (math.Sqrt(fDF) * getBeta(0.5, fDF/2.0))
+		break
+	case 4:
+		X := fDF / (T*T + fDF)
+		R := 0.5 * getBetaDist(X, 0.5*fDF, 0.5)
+		res = 1 - R
+		if T < 0 {
+			res = R
+		}
+		break
+	}
+	return res
+}
+
+// TdotDIST function calculates the one-tailed Student's T Distribution, which
+// is a continuous probability distribution that is frequently used for
+// testing hypotheses on small sample data sets. The syntax of the function
+// is:
+//
+//    T.DIST(x,degrees_freedom,cumulative)
+//
+func (fn *formulaFuncs) TdotDIST(argsList *list.List) formulaArg {
+	if argsList.Len() != 3 {
+		return newErrorFormulaArg(formulaErrorVALUE, "T.DIST requires 3 arguments")
+	}
+	var x, degrees, cumulative formulaArg
+	if x = argsList.Front().Value.(formulaArg).ToNumber(); x.Type != ArgNumber {
+		return x
+	}
+	if degrees = argsList.Front().Next().Value.(formulaArg).ToNumber(); degrees.Type != ArgNumber {
+		return degrees
+	}
+	if cumulative = argsList.Back().Value.(formulaArg).ToBool(); cumulative.Type != ArgNumber {
+		return cumulative
+	}
+	if cumulative.Number == 1 && degrees.Number < 1 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	if cumulative.Number == 0 {
+		if degrees.Number < 0 {
+			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+		}
+		if degrees.Number == 0 {
+			return newErrorFormulaArg(formulaErrorDIV, formulaErrorDIV)
+		}
+		return newNumberFormulaArg(getTDist(x.Number, degrees.Number, 3))
+	}
+	return newNumberFormulaArg(getTDist(x.Number, degrees.Number, 4))
+}
+
+// TdotDISTdot2T function calculates the two-tailed Student's T Distribution,
+// which is a continuous probability distribution that is frequently used for
+// testing hypotheses on small sample data sets. The syntax of the function
+// is:
+//
+//    T.DIST.2T(x,degrees_freedom)
+//
+func (fn *formulaFuncs) TdotDISTdot2T(argsList *list.List) formulaArg {
+	if argsList.Len() != 2 {
+		return newErrorFormulaArg(formulaErrorVALUE, "T.DIST.2T requires 2 arguments")
+	}
+	var x, degrees formulaArg
+	if x = argsList.Front().Value.(formulaArg).ToNumber(); x.Type != ArgNumber {
+		return x
+	}
+	if degrees = argsList.Back().Value.(formulaArg).ToNumber(); degrees.Type != ArgNumber {
+		return degrees
+	}
+	if x.Number < 0 || degrees.Number < 1 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	return newNumberFormulaArg(getTDist(x.Number, degrees.Number, 2))
+}
+
+// TdotDISTdotRT function calculates the right-tailed Student's T Distribution,
+// which is a continuous probability distribution that is frequently used for
+// testing hypotheses on small sample data sets. The syntax of the function
+// is:
+//
+//    T.DIST.RT(x,degrees_freedom)
+//
+func (fn *formulaFuncs) TdotDISTdotRT(argsList *list.List) formulaArg {
+	if argsList.Len() != 2 {
+		return newErrorFormulaArg(formulaErrorVALUE, "T.DIST.RT requires 2 arguments")
+	}
+	var x, degrees formulaArg
+	if x = argsList.Front().Value.(formulaArg).ToNumber(); x.Type != ArgNumber {
+		return x
+	}
+	if degrees = argsList.Back().Value.(formulaArg).ToNumber(); degrees.Type != ArgNumber {
+		return degrees
+	}
+	if degrees.Number < 1 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	v := getTDist(x.Number, degrees.Number, 1)
+	if x.Number < 0 {
+		v = 1 - v
+	}
+	return newNumberFormulaArg(v)
+}
+
+// TDIST function calculates the Student's T Distribution, which is a
+// continuous probability distribution that is frequently used for testing
+// hypotheses on small sample data sets. The syntax of the function is:
+//
+//    TDIST(x,degrees_freedom,tails)
+//
+func (fn *formulaFuncs) TDIST(argsList *list.List) formulaArg {
+	if argsList.Len() != 3 {
+		return newErrorFormulaArg(formulaErrorVALUE, "TDIST requires 3 arguments")
+	}
+	var x, degrees, tails formulaArg
+	if x = argsList.Front().Value.(formulaArg).ToNumber(); x.Type != ArgNumber {
+		return x
+	}
+	if degrees = argsList.Front().Next().Value.(formulaArg).ToNumber(); degrees.Type != ArgNumber {
+		return degrees
+	}
+	if tails = argsList.Back().Value.(formulaArg).ToNumber(); tails.Type != ArgNumber {
+		return tails
+	}
+	if x.Number < 0 || degrees.Number < 1 || (tails.Number != 1 && tails.Number != 2) {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	return newNumberFormulaArg(getTDist(x.Number, degrees.Number, tails.Number))
+}
+
+// TdotINV function calculates the left-tailed inverse of the Student's T
+// Distribution, which is a continuous probability distribution that is
+// frequently used for testing hypotheses on small sample data sets. The
+// syntax of the function is:
+//
+//    T.INV(probability,degrees_freedom)
+//
+func (fn *formulaFuncs) TdotINV(argsList *list.List) formulaArg {
+	if argsList.Len() != 2 {
+		return newErrorFormulaArg(formulaErrorVALUE, "T.INV requires 2 arguments")
+	}
+	var probability, degrees formulaArg
+	if probability = argsList.Front().Value.(formulaArg).ToNumber(); probability.Type != ArgNumber {
+		return probability
+	}
+	if degrees = argsList.Back().Value.(formulaArg).ToNumber(); degrees.Type != ArgNumber {
+		return degrees
+	}
+	if probability.Number <= 0 || probability.Number >= 1 || degrees.Number < 1 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	if probability.Number < 0.5 {
+		return newNumberFormulaArg(-calcIterateInverse(calcInverseIterator{
+			name: "T.INV",
+			fp:   1 - probability.Number,
+			fDF:  degrees.Number,
+			nT:   4,
+		}, degrees.Number/2, degrees.Number))
+	}
+	return newNumberFormulaArg(calcIterateInverse(calcInverseIterator{
+		name: "T.INV",
+		fp:   probability.Number,
+		fDF:  degrees.Number,
+		nT:   4,
+	}, degrees.Number/2, degrees.Number))
+}
+
+// TdotINVdot2T function calculates the inverse of the two-tailed Student's T
+// Distribution, which is a continuous probability distribution that is
+// frequently used for testing hypotheses on small sample data sets. The
+// syntax of the function is:
+//
+//    T.INV.2T(probability,degrees_freedom)
+//
+func (fn *formulaFuncs) TdotINVdot2T(argsList *list.List) formulaArg {
+	if argsList.Len() != 2 {
+		return newErrorFormulaArg(formulaErrorVALUE, "T.INV.2T requires 2 arguments")
+	}
+	var probability, degrees formulaArg
+	if probability = argsList.Front().Value.(formulaArg).ToNumber(); probability.Type != ArgNumber {
+		return probability
+	}
+	if degrees = argsList.Back().Value.(formulaArg).ToNumber(); degrees.Type != ArgNumber {
+		return degrees
+	}
+	if probability.Number <= 0 || probability.Number > 1 || degrees.Number < 1 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	return newNumberFormulaArg(calcIterateInverse(calcInverseIterator{
+		name: "T.INV.2T",
+		fp:   probability.Number,
+		fDF:  degrees.Number,
+		nT:   2,
+	}, degrees.Number/2, degrees.Number))
+}
+
+// TINV function calculates the inverse of the two-tailed Student's T
+// Distribution, which is a continuous probability distribution that is
+// frequently used for testing hypotheses on small sample data sets. The
+// syntax of the function is:
+//
+//    TINV(probability,degrees_freedom)
+//
+func (fn *formulaFuncs) TINV(argsList *list.List) formulaArg {
+	if argsList.Len() != 2 {
+		return newErrorFormulaArg(formulaErrorVALUE, "TINV requires 2 arguments")
+	}
+	return fn.TdotINVdot2T(argsList)
+}
+
+// tTest calculates the probability associated with the Student's T Test.
+func tTest(bTemplin bool, pMat1, pMat2 [][]formulaArg, nC1, nC2, nR1, nR2 int, fT, fF float64) (float64, float64, bool) {
+	var fCount1, fCount2, fSum1, fSumSqr1, fSum2, fSumSqr2 float64
+	var fVal formulaArg
+	for i := 0; i < nC1; i++ {
+		for j := 0; j < nR1; j++ {
+			fVal = pMat1[i][j].ToNumber()
+			if fVal.Type == ArgNumber {
+				fSum1 += fVal.Number
+				fSumSqr1 += fVal.Number * fVal.Number
+				fCount1++
+			}
+		}
+	}
+	for i := 0; i < nC2; i++ {
+		for j := 0; j < nR2; j++ {
+			fVal = pMat2[i][j].ToNumber()
+			if fVal.Type == ArgNumber {
+				fSum2 += fVal.Number
+				fSumSqr2 += fVal.Number * fVal.Number
+				fCount2++
+			}
+		}
+	}
+	if fCount1 < 2.0 || fCount2 < 2.0 {
+		return 0, 0, false
+	}
+	if bTemplin {
+		fS1 := (fSumSqr1 - fSum1*fSum1/fCount1) / (fCount1 - 1) / fCount1
+		fS2 := (fSumSqr2 - fSum2*fSum2/fCount2) / (fCount2 - 1) / fCount2
+		if fS1+fS2 == 0 {
+			return 0, 0, false
+		}
+		c := fS1 / (fS1 + fS2)
+		fT = math.Abs(fSum1/fCount1-fSum2/fCount2) / math.Sqrt(fS1+fS2)
+		fF = 1 / (c*c/(fCount1-1) + (1-c)*(1-c)/(fCount2-1))
+		return fT, fF, true
+	}
+	fS1 := (fSumSqr1 - fSum1*fSum1/fCount1) / (fCount1 - 1)
+	fS2 := (fSumSqr2 - fSum2*fSum2/fCount2) / (fCount2 - 1)
+	fT = math.Abs(fSum1/fCount1-fSum2/fCount2) / math.Sqrt((fCount1-1)*fS1+(fCount2-1)*fS2) * math.Sqrt(fCount1*fCount2*(fCount1+fCount2-2)/(fCount1+fCount2))
+	fF = fCount1 + fCount2 - 2
+	return fT, fF, true
+}
+
+// tTest is an implementation of the formula function TTEST.
+func (fn *formulaFuncs) tTest(pMat1, pMat2 [][]formulaArg, fTails, fTyp float64) formulaArg {
+	var fT, fF float64
+	nC1 := len(pMat1)
+	nC2 := len(pMat2)
+	nR1 := len(pMat1[0])
+	nR2 := len(pMat2[0])
+	ok := true
+	if fTyp == 1 {
+		if nC1 != nC2 || nR1 != nR2 {
+			return newErrorFormulaArg(formulaErrorNA, formulaErrorNA)
+		}
+		var fCount, fSum1, fSum2, fSumSqrD float64
+		var fVal1, fVal2 formulaArg
+		for i := 0; i < nC1; i++ {
+			for j := 0; j < nR1; j++ {
+				fVal1 = pMat1[i][j].ToNumber()
+				fVal2 = pMat2[i][j].ToNumber()
+				if fVal1.Type != ArgNumber || fVal2.Type != ArgNumber {
+					continue
+				}
+				fSum1 += fVal1.Number
+				fSum2 += fVal2.Number
+				fSumSqrD += (fVal1.Number - fVal2.Number) * (fVal1.Number - fVal2.Number)
+				fCount++
+			}
+		}
+		if fCount < 1 {
+			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+		}
+		fSumD := fSum1 - fSum2
+		fDivider := fCount*fSumSqrD - fSumD*fSumD
+		if fDivider == 0 {
+			return newErrorFormulaArg(formulaErrorDIV, formulaErrorDIV)
+		}
+		fT = math.Abs(fSumD) * math.Sqrt((fCount-1)/fDivider)
+		fF = fCount - 1
+	} else if fTyp == 2 {
+		fT, fF, ok = tTest(false, pMat1, pMat2, nC1, nC2, nR1, nR2, fT, fF)
+	} else {
+		fT, fF, ok = tTest(true, pMat1, pMat2, nC1, nC2, nR1, nR2, fT, fF)
+	}
+	if !ok {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	return newNumberFormulaArg(getTDist(fT, fF, fTails))
+}
+
+// TTEST function calculates the probability associated with the Student's T
+// Test, which is commonly used for identifying whether two data sets are
+// likely to have come from the same two underlying populations with the same
+// mean. The syntax of the function is:
+//
+//    TTEST(array1,array2,tails,type)
+//
+func (fn *formulaFuncs) TTEST(argsList *list.List) formulaArg {
+	if argsList.Len() != 4 {
+		return newErrorFormulaArg(formulaErrorVALUE, "TTEST requires 4 arguments")
+	}
+	var array1, array2, tails, typeArg formulaArg
+	array1 = argsList.Front().Value.(formulaArg)
+	array2 = argsList.Front().Next().Value.(formulaArg)
+	if tails = argsList.Front().Next().Next().Value.(formulaArg).ToNumber(); tails.Type != ArgNumber {
+		return tails
+	}
+	if typeArg = argsList.Back().Value.(formulaArg).ToNumber(); typeArg.Type != ArgNumber {
+		return typeArg
+	}
+	if len(array1.Matrix) == 0 || len(array2.Matrix) == 0 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	if tails.Number != 1 && tails.Number != 2 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	if typeArg.Number != 1 && typeArg.Number != 2 && typeArg.Number != 3 {
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	return fn.tTest(array1.Matrix, array2.Matrix, tails.Number, typeArg.Number)
+}
+
 // TRIMMEAN function calculates the trimmed mean (or truncated mean) of a
 // supplied set of values. The syntax of the function is:
 //
@@ -7226,7 +9358,7 @@ func (fn *formulaFuncs) TRIMMEAN(argsList *list.List) formulaArg {
 	if percent.Number < 0 || percent.Number >= 1 {
 		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 	}
-	arr := []float64{}
+	var arr []float64
 	arrArg := argsList.Front().Value.(formulaArg).ToList()
 	for _, cell := range arrArg {
 		num := cell.ToNumber()
@@ -7268,14 +9400,14 @@ func (fn *formulaFuncs) vars(name string, argsList *list.List) formulaArg {
 		for _, token := range arg.Value.(formulaArg).ToList() {
 			num := token.ToNumber()
 			if token.Value() != "TRUE" && num.Type == ArgNumber {
-				summerA += (num.Number * num.Number)
+				summerA += num.Number * num.Number
 				summerB += num.Number
 				count++
 				continue
 			}
 			num = token.ToBool()
 			if num.Type == ArgNumber {
-				summerA += (num.Number * num.Number)
+				summerA += num.Number * num.Number
 				summerB += num.Number
 				count++
 				continue
@@ -7366,10 +9498,10 @@ func (fn *formulaFuncs) WEIBULL(argsList *list.List) formulaArg {
 		}
 		cumulative := argsList.Back().Value.(formulaArg).ToBool()
 		if cumulative.Boolean && cumulative.Number == 1 {
-			return newNumberFormulaArg(1 - math.Exp(0-math.Pow((x.Number/beta.Number), alpha.Number)))
+			return newNumberFormulaArg(1 - math.Exp(0-math.Pow(x.Number/beta.Number, alpha.Number)))
 		}
 		return newNumberFormulaArg((alpha.Number / math.Pow(beta.Number, alpha.Number)) *
-			math.Pow(x.Number, (alpha.Number-1)) * math.Exp(0-math.Pow((x.Number/beta.Number), alpha.Number)))
+			math.Pow(x.Number, alpha.Number-1) * math.Exp(0-math.Pow(x.Number/beta.Number, alpha.Number)))
 	}
 	return newErrorFormulaArg(formulaErrorVALUE, formulaErrorVALUE)
 }
@@ -7626,7 +9758,7 @@ func (fn *formulaFuncs) ISNA(argsList *list.List) formulaArg {
 	return newStringFormulaArg(result)
 }
 
-// ISNONTEXT function function tests if a supplied value is text. If not, the
+// ISNONTEXT function tests if a supplied value is text. If not, the
 // function returns TRUE; If the supplied value is text, the function returns
 // FALSE. The syntax of the function is:
 //
@@ -7644,7 +9776,7 @@ func (fn *formulaFuncs) ISNONTEXT(argsList *list.List) formulaArg {
 	return newStringFormulaArg(result)
 }
 
-// ISNUMBER function function tests if a supplied value is a number. If so,
+// ISNUMBER function tests if a supplied value is a number. If so,
 // the function returns TRUE; Otherwise it returns FALSE. The syntax of the
 // function is:
 //
@@ -7907,7 +10039,7 @@ func (fn *formulaFuncs) AND(argsList *list.List) formulaArg {
 	return newBoolFormulaArg(and)
 }
 
-// FALSE function function returns the logical value FALSE. The syntax of the
+// FALSE function returns the logical value FALSE. The syntax of the
 // function is:
 //
 //    FALSE()
@@ -8235,16 +10367,16 @@ func (fn *formulaFuncs) DATEDIF(argsList *list.List) formulaArg {
 			diff--
 		}
 	case "m":
-		ydiff := ey - sy
-		mdiff := em - sm
+		yDiff := ey - sy
+		mDiff := em - sm
 		if ed < sd {
-			mdiff--
+			mDiff--
 		}
-		if mdiff < 0 {
-			ydiff--
-			mdiff += 12
+		if mDiff < 0 {
+			yDiff--
+			mDiff += 12
 		}
-		diff = float64(ydiff*12 + mdiff)
+		diff = float64(yDiff*12 + mDiff)
 	case "d", "md", "ym", "yd":
 		diff = calcDateDif(unit, diff, []int{ey, sy, em, sm, ed, sd}, startArg, endArg)
 	default:
@@ -8256,8 +10388,8 @@ func (fn *formulaFuncs) DATEDIF(argsList *list.List) formulaArg {
 // isDateOnlyFmt check if the given string matches date-only format regular expressions.
 func isDateOnlyFmt(dateString string) bool {
 	for _, df := range dateOnlyFormats {
-		submatch := df.FindStringSubmatch(dateString)
-		if len(submatch) > 1 {
+		subMatch := df.FindStringSubmatch(dateString)
+		if len(subMatch) > 1 {
 			return true
 		}
 	}
@@ -8267,8 +10399,8 @@ func isDateOnlyFmt(dateString string) bool {
 // isTimeOnlyFmt check if the given string matches time-only format regular expressions.
 func isTimeOnlyFmt(timeString string) bool {
 	for _, tf := range timeFormats {
-		submatch := tf.FindStringSubmatch(timeString)
-		if len(submatch) > 1 {
+		subMatch := tf.FindStringSubmatch(timeString)
+		if len(subMatch) > 1 {
 			return true
 		}
 	}
@@ -8277,50 +10409,51 @@ func isTimeOnlyFmt(timeString string) bool {
 
 // strToTimePatternHandler1 parse and convert the given string in pattern
 // hh to the time.
-func strToTimePatternHandler1(submatch []string) (h, m int, s float64, err error) {
-	h, err = strconv.Atoi(submatch[0])
+func strToTimePatternHandler1(subMatch []string) (h, m int, s float64, err error) {
+	h, err = strconv.Atoi(subMatch[0])
 	return
 }
 
 // strToTimePatternHandler2 parse and convert the given string in pattern
 // hh:mm to the time.
-func strToTimePatternHandler2(submatch []string) (h, m int, s float64, err error) {
-	if h, err = strconv.Atoi(submatch[0]); err != nil {
+func strToTimePatternHandler2(subMatch []string) (h, m int, s float64, err error) {
+	if h, err = strconv.Atoi(subMatch[0]); err != nil {
 		return
 	}
-	m, err = strconv.Atoi(submatch[2])
+	m, err = strconv.Atoi(subMatch[2])
 	return
 }
 
 // strToTimePatternHandler3 parse and convert the given string in pattern
 // mm:ss to the time.
-func strToTimePatternHandler3(submatch []string) (h, m int, s float64, err error) {
-	if m, err = strconv.Atoi(submatch[0]); err != nil {
+func strToTimePatternHandler3(subMatch []string) (h, m int, s float64, err error) {
+	if m, err = strconv.Atoi(subMatch[0]); err != nil {
 		return
 	}
-	s, err = strconv.ParseFloat(submatch[2], 64)
+	s, err = strconv.ParseFloat(subMatch[2], 64)
 	return
 }
 
 // strToTimePatternHandler4 parse and convert the given string in pattern
 // hh:mm:ss to the time.
-func strToTimePatternHandler4(submatch []string) (h, m int, s float64, err error) {
-	if h, err = strconv.Atoi(submatch[0]); err != nil {
+func strToTimePatternHandler4(subMatch []string) (h, m int, s float64, err error) {
+	if h, err = strconv.Atoi(subMatch[0]); err != nil {
 		return
 	}
-	if m, err = strconv.Atoi(submatch[2]); err != nil {
+	if m, err = strconv.Atoi(subMatch[2]); err != nil {
 		return
 	}
-	s, err = strconv.ParseFloat(submatch[4], 64)
+	s, err = strconv.ParseFloat(subMatch[4], 64)
 	return
 }
 
 // strToTime parse and convert the given string to the time.
 func strToTime(str string) (int, int, float64, bool, bool, formulaArg) {
-	pattern, submatch := "", []string{}
+	var subMatch []string
+	pattern := ""
 	for key, tf := range timeFormats {
-		submatch = tf.FindStringSubmatch(str)
-		if len(submatch) > 1 {
+		subMatch = tf.FindStringSubmatch(str)
+		if len(subMatch) > 1 {
 			pattern = key
 			break
 		}
@@ -8328,24 +10461,24 @@ func strToTime(str string) (int, int, float64, bool, bool, formulaArg) {
 	if pattern == "" {
 		return 0, 0, 0, false, false, newErrorFormulaArg(formulaErrorVALUE, formulaErrorVALUE)
 	}
-	dateIsEmpty := submatch[1] == ""
-	submatch = submatch[49:]
+	dateIsEmpty := subMatch[1] == ""
+	subMatch = subMatch[49:]
 	var (
-		l              = len(submatch)
-		last           = submatch[l-1]
+		l              = len(subMatch)
+		last           = subMatch[l-1]
 		am             = last == "am"
 		pm             = last == "pm"
 		hours, minutes int
 		seconds        float64
 		err            error
 	)
-	if handler, ok := map[string]func(subsubmatch []string) (int, int, float64, error){
+	if handler, ok := map[string]func(match []string) (int, int, float64, error){
 		"hh":       strToTimePatternHandler1,
 		"hh:mm":    strToTimePatternHandler2,
 		"mm:ss":    strToTimePatternHandler3,
 		"hh:mm:ss": strToTimePatternHandler4,
 	}[pattern]; ok {
-		if hours, minutes, seconds, err = handler(submatch); err != nil {
+		if hours, minutes, seconds, err = handler(subMatch); err != nil {
 			return 0, 0, 0, false, false, newErrorFormulaArg(formulaErrorVALUE, formulaErrorVALUE)
 		}
 	}
@@ -8366,55 +10499,55 @@ func strToTime(str string) (int, int, float64, bool, bool, formulaArg) {
 
 // strToDatePatternHandler1 parse and convert the given string in pattern
 // mm/dd/yy to the date.
-func strToDatePatternHandler1(submatch []string) (int, int, int, bool, error) {
+func strToDatePatternHandler1(subMatch []string) (int, int, int, bool, error) {
 	var year, month, day int
 	var err error
-	if month, err = strconv.Atoi(submatch[1]); err != nil {
+	if month, err = strconv.Atoi(subMatch[1]); err != nil {
 		return 0, 0, 0, false, err
 	}
-	if day, err = strconv.Atoi(submatch[3]); err != nil {
+	if day, err = strconv.Atoi(subMatch[3]); err != nil {
 		return 0, 0, 0, false, err
 	}
-	if year, err = strconv.Atoi(submatch[5]); err != nil {
+	if year, err = strconv.Atoi(subMatch[5]); err != nil {
 		return 0, 0, 0, false, err
 	}
 	if year < 0 || year > 9999 || (year > 99 && year < 1900) {
 		return 0, 0, 0, false, ErrParameterInvalid
 	}
-	return formatYear(year), month, day, submatch[8] == "", err
+	return formatYear(year), month, day, subMatch[8] == "", err
 }
 
 // strToDatePatternHandler2 parse and convert the given string in pattern mm
 // dd, yy to the date.
-func strToDatePatternHandler2(submatch []string) (int, int, int, bool, error) {
+func strToDatePatternHandler2(subMatch []string) (int, int, int, bool, error) {
 	var year, month, day int
 	var err error
-	month = month2num[submatch[1]]
-	if day, err = strconv.Atoi(submatch[14]); err != nil {
+	month = month2num[subMatch[1]]
+	if day, err = strconv.Atoi(subMatch[14]); err != nil {
 		return 0, 0, 0, false, err
 	}
-	if year, err = strconv.Atoi(submatch[16]); err != nil {
+	if year, err = strconv.Atoi(subMatch[16]); err != nil {
 		return 0, 0, 0, false, err
 	}
 	if year < 0 || year > 9999 || (year > 99 && year < 1900) {
 		return 0, 0, 0, false, ErrParameterInvalid
 	}
-	return formatYear(year), month, day, submatch[19] == "", err
+	return formatYear(year), month, day, subMatch[19] == "", err
 }
 
 // strToDatePatternHandler3 parse and convert the given string in pattern
 // yy-mm-dd to the date.
-func strToDatePatternHandler3(submatch []string) (int, int, int, bool, error) {
+func strToDatePatternHandler3(subMatch []string) (int, int, int, bool, error) {
 	var year, month, day int
-	v1, err := strconv.Atoi(submatch[1])
+	v1, err := strconv.Atoi(subMatch[1])
 	if err != nil {
 		return 0, 0, 0, false, err
 	}
-	v2, err := strconv.Atoi(submatch[3])
+	v2, err := strconv.Atoi(subMatch[3])
 	if err != nil {
 		return 0, 0, 0, false, err
 	}
-	v3, err := strconv.Atoi(submatch[5])
+	v3, err := strconv.Atoi(subMatch[5])
 	if err != nil {
 		return 0, 0, 0, false, err
 	}
@@ -8429,30 +10562,31 @@ func strToDatePatternHandler3(submatch []string) (int, int, int, bool, error) {
 	} else {
 		return 0, 0, 0, false, ErrParameterInvalid
 	}
-	return year, month, day, submatch[8] == "", err
+	return year, month, day, subMatch[8] == "", err
 }
 
 // strToDatePatternHandler4 parse and convert the given string in pattern
 // yy-mmStr-dd, yy to the date.
-func strToDatePatternHandler4(submatch []string) (int, int, int, bool, error) {
+func strToDatePatternHandler4(subMatch []string) (int, int, int, bool, error) {
 	var year, month, day int
 	var err error
-	if year, err = strconv.Atoi(submatch[16]); err != nil {
+	if year, err = strconv.Atoi(subMatch[16]); err != nil {
 		return 0, 0, 0, false, err
 	}
-	month = month2num[submatch[3]]
-	if day, err = strconv.Atoi(submatch[1]); err != nil {
+	month = month2num[subMatch[3]]
+	if day, err = strconv.Atoi(subMatch[1]); err != nil {
 		return 0, 0, 0, false, err
 	}
-	return formatYear(year), month, day, submatch[19] == "", err
+	return formatYear(year), month, day, subMatch[19] == "", err
 }
 
 // strToDate parse and convert the given string to the date.
 func strToDate(str string) (int, int, int, bool, formulaArg) {
-	pattern, submatch := "", []string{}
+	var subMatch []string
+	pattern := ""
 	for key, df := range dateFormats {
-		submatch = df.FindStringSubmatch(str)
-		if len(submatch) > 1 {
+		subMatch = df.FindStringSubmatch(str)
+		if len(subMatch) > 1 {
 			pattern = key
 			break
 		}
@@ -8465,13 +10599,13 @@ func strToDate(str string) (int, int, int, bool, formulaArg) {
 		year, month, day int
 		err              error
 	)
-	if handler, ok := map[string]func(subsubmatch []string) (int, int, int, bool, error){
+	if handler, ok := map[string]func(match []string) (int, int, int, bool, error){
 		"mm/dd/yy":    strToDatePatternHandler1,
 		"mm dd, yy":   strToDatePatternHandler2,
 		"yy-mm-dd":    strToDatePatternHandler3,
 		"yy-mmStr-dd": strToDatePatternHandler4,
 	}[pattern]; ok {
-		if year, month, day, timeIsEmpty, err = handler(submatch); err != nil {
+		if year, month, day, timeIsEmpty, err = handler(subMatch); err != nil {
 			return 0, 0, 0, false, newErrorFormulaArg(formulaErrorVALUE, formulaErrorVALUE)
 		}
 	}
@@ -8483,8 +10617,8 @@ func strToDate(str string) (int, int, int, bool, formulaArg) {
 
 // DATEVALUE function converts a text representation of a date into an Excel
 // date. For example, the function converts a text string representing a
-// date, into the serial number that represents the date in Excel's date-time
-// code.  The syntax of the function is:
+// date, into the serial number that represents the date in Excels' date-time
+// code. The syntax of the function is:
 //
 //    DATEVALUE(date_text)
 //
@@ -8567,7 +10701,7 @@ func (fn *formulaFuncs) ISOWEEKNUM(argsList *list.List) formulaArg {
 	}
 	date := argsList.Front().Value.(formulaArg)
 	num := date.ToNumber()
-	weeknum := 0
+	weekNum := 0
 	if num.Type != ArgNumber {
 		dateString := strings.ToLower(date.Value())
 		if !isDateOnlyFmt(dateString) {
@@ -8579,14 +10713,14 @@ func (fn *formulaFuncs) ISOWEEKNUM(argsList *list.List) formulaArg {
 		if err.Type == ArgError {
 			return err
 		}
-		_, weeknum = time.Date(y, time.Month(m), d, 0, 0, 0, 0, time.UTC).ISOWeek()
+		_, weekNum = time.Date(y, time.Month(m), d, 0, 0, 0, 0, time.UTC).ISOWeek()
 	} else {
 		if num.Number < 0 {
 			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 		}
-		_, weeknum = timeFromExcelTime(num.Number, false).ISOWeek()
+		_, weekNum = timeFromExcelTime(num.Number, false).ISOWeek()
 	}
-	return newNumberFormulaArg(float64(weeknum))
+	return newNumberFormulaArg(float64(weekNum))
 }
 
 // HOUR function returns an integer representing the hour component of a
@@ -8903,7 +11037,7 @@ func (fn *formulaFuncs) SECOND(argsList *list.List) formulaArg {
 
 // TIME function accepts three integer arguments representing hours, minutes
 // and seconds, and returns an Excel time. I.e. the function returns the
-// decimal value that represents the time in Excel. The syntax of the Time
+// decimal value that represents the time in Excel. The syntax of the
 // function is:
 //
 //    TIME(hour,minute,second)
@@ -8926,7 +11060,7 @@ func (fn *formulaFuncs) TIME(argsList *list.List) formulaArg {
 }
 
 // TIMEVALUE function converts a text representation of a time, into an Excel
-// time. The syntax of the Timevalue function is:
+// time. The syntax of the function is:
 //
 //    TIMEVALUE(time_text)
 //
@@ -9889,19 +12023,18 @@ func matchPattern(pattern, name string) (matched bool) {
 	if pattern == "*" {
 		return true
 	}
-	rname, rpattern := make([]rune, 0, len(name)), make([]rune, 0, len(pattern))
+	rName, rPattern := make([]rune, 0, len(name)), make([]rune, 0, len(pattern))
 	for _, r := range name {
-		rname = append(rname, r)
+		rName = append(rName, r)
 	}
 	for _, r := range pattern {
-		rpattern = append(rpattern, r)
+		rPattern = append(rPattern, r)
 	}
-	simple := false // Does extended wildcard '*' and '?' match.
-	return deepMatchRune(rname, rpattern, simple)
+	return deepMatchRune(rName, rPattern, false)
 }
 
-// compareFormulaArg compares the left-hand sides and the right-hand sides
-// formula arguments by given conditions such as case sensitive, if exact
+// compareFormulaArg compares the left-hand sides and the right-hand sides'
+// formula arguments by given conditions such as case-sensitive, if exact
 // match, and make compare result as formula criteria condition type.
 func compareFormulaArg(lhs, rhs, matchMode formulaArg, caseSensitive bool) byte {
 	if lhs.Type != rhs.Type {
@@ -9955,7 +12088,7 @@ func compareFormulaArgList(lhs, rhs, matchMode formulaArg, caseSensitive bool) b
 	return criteriaEq
 }
 
-// compareFormulaArgMatrix compares the left-hand sides and the right-hand sides
+// compareFormulaArgMatrix compares the left-hand sides and the right-hand sides'
 // matrix type formula arguments.
 func compareFormulaArgMatrix(lhs, rhs, matchMode formulaArg, caseSensitive bool) byte {
 	if len(lhs.Matrix) < len(rhs.Matrix) {
@@ -10281,7 +12414,7 @@ func (fn *formulaFuncs) TRANSPOSE(argsList *list.List) formulaArg {
 // lookupLinearSearch sequentially checks each look value of the lookup array until
 // a match is found or the whole list has been searched.
 func lookupLinearSearch(vertical bool, lookupValue, lookupArray, matchMode, searchMode formulaArg) (int, bool) {
-	tableArray := []formulaArg{}
+	var tableArray []formulaArg
 	if vertical {
 		for _, row := range lookupArray.Matrix {
 			tableArray = append(tableArray, row[0])
@@ -10350,7 +12483,7 @@ func (fn *formulaFuncs) VLOOKUP(argsList *list.List) formulaArg {
 // is TRUE, if the data of table array can't guarantee be sorted, it will
 // return wrong result.
 func lookupBinarySearch(vertical bool, lookupValue, lookupArray, matchMode, searchMode formulaArg) (matchIdx int, wasExact bool) {
-	tableArray := []formulaArg{}
+	var tableArray []formulaArg
 	if vertical {
 		for _, row := range lookupArray.Matrix {
 			tableArray = append(tableArray, row[0])
@@ -10358,7 +12491,7 @@ func lookupBinarySearch(vertical bool, lookupValue, lookupArray, matchMode, sear
 	} else {
 		tableArray = lookupArray.Matrix[0]
 	}
-	var low, high, lastMatchIdx int = 0, len(tableArray) - 1, -1
+	low, high, lastMatchIdx := 0, len(tableArray)-1, -1
 	count := high
 	for low <= high {
 		mid := low + (high-low)/2
@@ -10439,7 +12572,7 @@ func iterateLookupArgs(lookupValue, lookupVector formulaArg) ([]formulaArg, int,
 			matchIdx = idx
 			break
 		}
-		// Find nearest match if lookup value is more than or equal to the first value in lookup vector
+		// Find the nearest match if lookup value is more than or equal to the first value in lookup vector
 		if idx == 0 {
 			ok = compare == criteriaG
 		} else if ok && compare == criteriaL && matchIdx == -1 {
@@ -10461,7 +12594,7 @@ func (fn *formulaFuncs) index(array formulaArg, rowIdx, colIdx int) formulaArg {
 			if colIdx >= len(cellMatrix[0]) {
 				return newErrorFormulaArg(formulaErrorREF, "INDEX col_num out of range")
 			}
-			column := [][]formulaArg{}
+			var column [][]formulaArg
 			for _, cells = range cellMatrix {
 				column = append(column, []formulaArg{cells[colIdx]})
 			}
@@ -10525,8 +12658,9 @@ func (fn *formulaFuncs) prepareXlookupArgs(argsList *list.List) formulaArg {
 
 // xlookup is an implementation of the formula function XLOOKUP.
 func (fn *formulaFuncs) xlookup(lookupRows, lookupCols, returnArrayRows, returnArrayCols, matchIdx int,
-	condition1, condition2, condition3, condition4 bool, returnArray formulaArg) formulaArg {
-	result := [][]formulaArg{}
+	condition1, condition2, condition3, condition4 bool, returnArray formulaArg,
+) formulaArg {
+	var result [][]formulaArg
 	for rowIdx, row := range returnArray.Matrix {
 		for colIdx, cell := range row {
 			if condition1 {
@@ -11075,7 +13209,7 @@ func (fn *formulaFuncs) AMORLINC(argsList *list.List) formulaArg {
 	if int(period.Number) <= periods {
 		return newNumberFormulaArg(rate2)
 	} else if int(period.Number)-1 == periods {
-		return newNumberFormulaArg(delta - rate2*float64(periods) - rate1)
+		return newNumberFormulaArg(delta - rate2*float64(periods) - math.Nextafter(rate1, rate1))
 	}
 	return newNumberFormulaArg(0)
 }
@@ -11118,7 +13252,7 @@ func is30BasisMethod(basis int) bool {
 
 // getDaysInMonthRange return the day by given year, month range and day count
 // basis.
-func getDaysInMonthRange(year, fromMonth, toMonth, basis int) int {
+func getDaysInMonthRange(fromMonth, toMonth int) int {
 	if fromMonth > toMonth {
 		return 0
 	}
@@ -11166,10 +13300,10 @@ func coupdays(from, to time.Time, basis int) float64 {
 		fromDay = 1
 		date := time.Date(fromY, fromM, fromD, 0, 0, 0, 0, time.UTC).AddDate(0, 1, 0)
 		if date.Year() < toY {
-			days += getDaysInMonthRange(date.Year(), int(date.Month()), 12, basis)
+			days += getDaysInMonthRange(int(date.Month()), 12)
 			date = date.AddDate(0, 13-int(date.Month()), 0)
 		}
-		days += getDaysInMonthRange(toY, int(date.Month()), int(toM)-1, basis)
+		days += getDaysInMonthRange(int(date.Month()), int(toM)-1)
 	}
 	if days += toDay - fromDay; days > 0 {
 		return float64(days)
@@ -11376,7 +13510,7 @@ func (fn *formulaFuncs) cumip(name string, argsList *list.List) formulaArg {
 	return newNumberFormulaArg(num)
 }
 
-// calcDbArgsCompare implements common arguments comparison for DB and DDB.
+// calcDbArgsCompare implements common arguments' comparison for DB and DDB.
 func calcDbArgsCompare(cost, salvage, life, period formulaArg) bool {
 	return (cost.Number <= 0) || ((salvage.Number / cost.Number) < 0) || (life.Number <= 0) || (period.Number < 1)
 }
@@ -11481,7 +13615,7 @@ func (fn *formulaFuncs) DDB(argsList *list.List) formulaArg {
 	}
 	pd, depreciation := 0.0, 0.0
 	for per := 1; per <= int(period.Number); per++ {
-		depreciation = math.Min((cost.Number-pd)*(factor.Number/life.Number), (cost.Number - salvage.Number - pd))
+		depreciation = math.Min((cost.Number-pd)*(factor.Number/life.Number), cost.Number-salvage.Number-pd)
 		pd += depreciation
 	}
 	return newNumberFormulaArg(depreciation)
@@ -11491,7 +13625,7 @@ func (fn *formulaFuncs) DDB(argsList *list.List) formulaArg {
 // formula functions.
 func (fn *formulaFuncs) prepareDataValueArgs(n int, argsList *list.List) formulaArg {
 	l := list.New()
-	dataValues := []formulaArg{}
+	var dataValues []formulaArg
 	getDateValue := func(arg formulaArg, l *list.List) formulaArg {
 		switch arg.Type {
 		case ArgNumber:
@@ -11728,7 +13862,7 @@ func (fn *formulaFuncs) EFFECT(argsList *list.List) formulaArg {
 	if rate.Number <= 0 || npery.Number < 1 {
 		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 	}
-	return newNumberFormulaArg(math.Pow((1+rate.Number/npery.Number), npery.Number) - 1)
+	return newNumberFormulaArg(math.Pow(1+rate.Number/npery.Number, npery.Number) - 1)
 }
 
 // FV function calculates the Future Value of an investment with periodic
@@ -11798,7 +13932,7 @@ func (fn *formulaFuncs) FVSCHEDULE(argsList *list.List) formulaArg {
 		if rate.Type != ArgNumber {
 			return rate
 		}
-		principal *= (1 + rate.Number)
+		principal *= 1 + rate.Number
 	}
 	return newNumberFormulaArg(principal)
 }
@@ -11958,7 +14092,7 @@ func (fn *formulaFuncs) IRR(argsList *list.List) formulaArg {
 		if f1.Number*f2.Number < 0 {
 			break
 		}
-		if math.Abs(f1.Number) < math.Abs((f2.Number)) {
+		if math.Abs(f1.Number) < math.Abs(f2.Number) {
 			x1.Number += 1.6 * (x1.Number - x2.Number)
 			args.Front().Value = x1
 			f1 = fn.NPV(args)
@@ -11989,7 +14123,7 @@ func (fn *formulaFuncs) IRR(argsList *list.List) formulaArg {
 		if fMid <= 0 {
 			rtb = xMid
 		}
-		if math.Abs(fMid) < financialPercision || math.Abs(dx) < financialPercision {
+		if math.Abs(fMid) < financialPrecision || math.Abs(dx) < financialPrecision {
 			break
 		}
 	}
@@ -12074,10 +14208,10 @@ func (fn *formulaFuncs) MIRR(argsList *list.List) formulaArg {
 	for i, v := range values {
 		val := v.ToNumber()
 		if val.Number >= 0 {
-			npvPos += val.Number / math.Pow(float64(rr), float64(i))
+			npvPos += val.Number / math.Pow(rr, float64(i))
 			continue
 		}
-		npvNeg += val.Number / math.Pow(float64(fr), float64(i))
+		npvNeg += val.Number / math.Pow(fr, float64(i))
 	}
 	if npvNeg == 0 || npvPos == 0 || reinvestRate.Number <= -1 {
 		return newErrorFormulaArg(formulaErrorDIV, formulaErrorDIV)
@@ -12186,7 +14320,7 @@ func (fn *formulaFuncs) NPV(argsList *list.List) formulaArg {
 
 // aggrBetween is a part of implementation of the formula function ODDFPRICE.
 func aggrBetween(startPeriod, endPeriod float64, initialValue []float64, f func(acc []float64, index float64) []float64) []float64 {
-	s := []float64{}
+	var s []float64
 	if startPeriod <= endPeriod {
 		for i := startPeriod; i <= endPeriod; i++ {
 			s = append(s, i)
@@ -12224,7 +14358,7 @@ func changeMonth(date time.Time, numMonths float64, returnLastMonth bool) time.T
 
 // datesAggregate is a part of implementation of the formula function
 // ODDFPRICE.
-func datesAggregate(startDate, endDate time.Time, numMonths, basis float64, f func(pcd, ncd time.Time) float64, acc float64, returnLastMonth bool) (time.Time, time.Time, float64) {
+func datesAggregate(startDate, endDate time.Time, numMonths float64, f func(pcd, ncd time.Time) float64, acc float64, returnLastMonth bool) (time.Time, time.Time, float64) {
 	frontDate, trailingDate := startDate, endDate
 	s1 := frontDate.After(endDate) || frontDate.Equal(endDate)
 	s2 := endDate.After(frontDate) || endDate.Equal(frontDate)
@@ -12248,7 +14382,7 @@ func datesAggregate(startDate, endDate time.Time, numMonths, basis float64, f fu
 }
 
 // coupNumber is a part of implementation of the formula function ODDFPRICE.
-func coupNumber(maturity, settlement, numMonths, basis float64) float64 {
+func coupNumber(maturity, settlement, numMonths float64) float64 {
 	maturityTime, settlementTime := timeFromExcelTime(maturity, false), timeFromExcelTime(settlement, false)
 	my, mm, md := maturityTime.Year(), maturityTime.Month(), maturityTime.Day()
 	sy, sm, sd := settlementTime.Year(), settlementTime.Month(), settlementTime.Day()
@@ -12266,7 +14400,7 @@ func coupNumber(maturity, settlement, numMonths, basis float64) float64 {
 	f := func(pcd, ncd time.Time) float64 {
 		return 1
 	}
-	_, _, result := datesAggregate(date, maturityTime, numMonths, basis, f, coupons, endOfMonth)
+	_, _, result := datesAggregate(date, maturityTime, numMonths, f, coupons, endOfMonth)
 	return result
 }
 
@@ -12351,7 +14485,7 @@ func (fn *formulaFuncs) ODDFPRICE(argsList *list.List) formulaArg {
 	numMonths := 12 / frequency.Number
 	numMonthsNeg := -numMonths
 	mat := changeMonth(maturityTime, numMonthsNeg, returnLastMonth)
-	pcd, _, _ := datesAggregate(mat, firstCouponTime, numMonthsNeg, basisArg.Number, func(d1, d2 time.Time) float64 {
+	pcd, _, _ := datesAggregate(mat, firstCouponTime, numMonthsNeg, func(d1, d2 time.Time) float64 {
 		return 0
 	}, 0, returnLastMonth)
 	if !pcd.Equal(firstCouponTime) {
@@ -12432,7 +14566,7 @@ func (fn *formulaFuncs) ODDFPRICE(argsList *list.List) formulaArg {
 		a := coupdays(d, settlementTime, basis)
 		dsc = e.Number - a
 	}
-	nq := coupNumber(firstCoupon.Number, settlement.Number, numMonths, basisArg.Number)
+	nq := coupNumber(firstCoupon.Number, settlement.Number, numMonths)
 	fnArgs.Init()
 	fnArgs.PushBack(firstCoupon)
 	fnArgs.PushBack(maturity)
@@ -12521,7 +14655,7 @@ func (fn *formulaFuncs) PMT(argsList *list.List) formulaArg {
 		return newErrorFormulaArg(formulaErrorNA, formulaErrorNA)
 	}
 	if rate.Number != 0 {
-		p := (-fv.Number - pv.Number*math.Pow((1+rate.Number), nper.Number)) / (1 + rate.Number*typ.Number) / ((math.Pow((1+rate.Number), nper.Number) - 1) / rate.Number)
+		p := (-fv.Number - pv.Number*math.Pow(1+rate.Number, nper.Number)) / (1 + rate.Number*typ.Number) / ((math.Pow(1+rate.Number, nper.Number) - 1) / rate.Number)
 		return newNumberFormulaArg(p)
 	}
 	return newNumberFormulaArg((-pv.Number - fv.Number) / nper.Number)
@@ -12760,19 +14894,21 @@ func (fn *formulaFuncs) PV(argsList *list.List) formulaArg {
 }
 
 // rate is an implementation of the formula function RATE.
-func (fn *formulaFuncs) rate(nper, pmt, pv, fv, t, guess formulaArg, argsList *list.List) formulaArg {
-	maxIter, iter, close, epsMax, rate := 100, 0, false, 1e-6, guess.Number
-	for iter < maxIter && !close {
+func (fn *formulaFuncs) rate(nper, pmt, pv, fv, t, guess formulaArg) formulaArg {
+	maxIter, iter, isClose, epsMax, rate := 100, 0, false, 1e-6, guess.Number
+	for iter < maxIter && !isClose {
 		t1 := math.Pow(rate+1, nper.Number)
 		t2 := math.Pow(rate+1, nper.Number-1)
 		rt := rate*t.Number + 1
 		p0 := pmt.Number * (t1 - 1)
 		f1 := fv.Number + t1*pv.Number + p0*rt/rate
-		f2 := nper.Number*t2*pv.Number - p0*rt/math.Pow(rate, 2)
+		n1 := nper.Number * t2 * pv.Number
+		n2 := p0 * rt / math.Pow(rate, 2)
+		f2 := math.Nextafter(n1, n1) - math.Nextafter(n2, n2)
 		f3 := (nper.Number*pmt.Number*t2*rt + p0*t.Number) / rate
 		delta := f1 / (f2 + f3)
 		if math.Abs(delta) < epsMax {
-			close = true
+			isClose = true
 		}
 		iter++
 		rate -= delta
@@ -12826,7 +14962,7 @@ func (fn *formulaFuncs) RATE(argsList *list.List) formulaArg {
 			return guess
 		}
 	}
-	return fn.rate(nper, pmt, pv, fv, t, guess, argsList)
+	return fn.rate(nper, pmt, pv, fv, t, guess)
 }
 
 // RECEIVED function calculates the amount received at maturity for a fully
@@ -13170,7 +15306,7 @@ func (fn *formulaFuncs) VDB(argsList *list.List) formulaArg {
 }
 
 // prepareXArgs prepare arguments for the formula function XIRR and XNPV.
-func (fn *formulaFuncs) prepareXArgs(name string, values, dates formulaArg) (valuesArg, datesArg []float64, err formulaArg) {
+func (fn *formulaFuncs) prepareXArgs(values, dates formulaArg) (valuesArg, datesArg []float64, err formulaArg) {
 	for _, arg := range values.ToList() {
 		if numArg := arg.ToNumber(); numArg.Type == ArgNumber {
 			valuesArg = append(valuesArg, numArg.Number)
@@ -13278,7 +15414,7 @@ func (fn *formulaFuncs) XIRR(argsList *list.List) formulaArg {
 	if argsList.Len() != 2 && argsList.Len() != 3 {
 		return newErrorFormulaArg(formulaErrorVALUE, "XIRR requires 2 or 3 arguments")
 	}
-	values, dates, err := fn.prepareXArgs("XIRR", argsList.Front().Value.(formulaArg), argsList.Front().Next().Value.(formulaArg))
+	values, dates, err := fn.prepareXArgs(argsList.Front().Value.(formulaArg), argsList.Front().Next().Value.(formulaArg))
 	if err.Type != ArgEmpty {
 		return err
 	}
@@ -13310,7 +15446,7 @@ func (fn *formulaFuncs) XNPV(argsList *list.List) formulaArg {
 	if rate.Number <= 0 {
 		return newErrorFormulaArg(formulaErrorVALUE, "XNPV requires rate > 0")
 	}
-	values, dates, err := fn.prepareXArgs("XNPV", argsList.Front().Next().Value.(formulaArg), argsList.Back().Value.(formulaArg))
+	values, dates, err := fn.prepareXArgs(argsList.Front().Next().Value.(formulaArg), argsList.Back().Value.(formulaArg))
 	if err.Type != ArgEmpty {
 		return err
 	}
@@ -13350,7 +15486,8 @@ func (fn *formulaFuncs) yield(settlement, maturity, rate, pr, redemption, freque
 				yield2 = yieldN
 				price2 = priceN
 			}
-			yieldN.Number = yield2.Number - (yield2.Number-yield1.Number)*((pr.Number-price2.Number)/(price1.Number-price2.Number))
+			f1 := (yield2.Number - yield1.Number) * ((pr.Number - price2.Number) / (price1.Number - price2.Number))
+			yieldN.Number = yield2.Number - math.Nextafter(f1, f1)
 		}
 	}
 	return yieldN
@@ -13500,7 +15637,8 @@ func (fn *formulaFuncs) YIELDMAT(argsList *list.List) formulaArg {
 	}
 	dis := yearFrac(issue.Number, settlement.Number, int(basis.Number))
 	dsm := yearFrac(settlement.Number, maturity.Number, int(basis.Number))
-	result := 1 + dim.Number*rate.Number
+	f1 := dim.Number * rate.Number
+	result := 1 + math.Nextafter(f1, f1)
 	result /= pr.Number/100 + dis.Number*rate.Number
 	result--
 	result /= dsm.Number

@@ -179,7 +179,7 @@ type ErrSheetNotExist struct {
 }
 
 func (err ErrSheetNotExist) Error() string {
-	return fmt.Sprintf("sheet %s is not exist", string(err.SheetName))
+	return fmt.Sprintf("sheet %s is not exist", err.SheetName)
 }
 
 // rowXMLIterator defined runtime use field for the worksheet row SAX parser.
@@ -459,6 +459,13 @@ func (c *xlsxC) getValueFrom(f *File, d *xlsxSST, raw bool) (string, error) {
 		}
 		return f.formattedValue(c.S, c.V, raw), nil
 	default:
+		if isNum, precision := isNumeric(c.V); isNum && !raw {
+			if precision == 0 {
+				c.V = roundPrecision(c.V, 15)
+			} else {
+				c.V = roundPrecision(c.V, -1)
+			}
+		}
 		return f.formattedValue(c.S, c.V, raw), nil
 	}
 }
@@ -471,7 +478,7 @@ func roundPrecision(text string, prec int) string {
 	if _, ok := decimal.SetString(text); ok {
 		flt, _ := decimal.Float64()
 		if prec == -1 {
-			return decimal.Text('G', 15)
+			return strconv.FormatFloat(flt, 'G', 15, 64)
 		}
 		return strconv.FormatFloat(flt, 'f', -1, 64)
 	}

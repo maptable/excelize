@@ -13,6 +13,7 @@ package excelize
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -32,22 +33,24 @@ type languageInfo struct {
 type numberFormat struct {
 	section                                                                 []nfp.Section
 	t                                                                       time.Time
-	sectionIdx                                                              int
-	isNumberic, hours, seconds                                              bool
-	number                                                                  float64
+	sectionIdx                int
+	isNumeric, hours, seconds bool
+	number                    float64
 	ap, afterPoint, beforePoint, localCode, result, value, valueSectionType string
 }
 
 var (
 	// supportedTokenTypes list the supported number format token types currently.
 	supportedTokenTypes = []string{
+		nfp.TokenSubTypeLanguageInfo,
+		nfp.TokenTypeColor,
 		nfp.TokenTypeCurrencyLanguage,
 		nfp.TokenTypeDateTimes,
 		nfp.TokenTypeElapsedDateTimes,
 		nfp.TokenTypeGeneral,
 		nfp.TokenTypeLiteral,
 		nfp.TokenTypeTextPlaceHolder,
-		nfp.TokenSubTypeLanguageInfo,
+		nfp.TokenTypeZeroPlaceHolder,
 	}
 	// supportedLanguageInfo directly maps the supported language ID and tags.
 	supportedLanguageInfo = map[string]languageInfo{
@@ -276,11 +279,9 @@ var (
 // prepareNumberic split the number into two before and after parts by a
 // decimal point.
 func (nf *numberFormat) prepareNumberic(value string) {
-	prec := 0
-	if nf.isNumberic, prec = isNumeric(value); !nf.isNumberic {
+	if nf.isNumeric, _ = isNumeric(value); !nf.isNumeric {
 		return
 	}
-	nf.beforePoint, nf.afterPoint = value[:len(value)-prec-1], value[len(value)-prec:]
 }
 
 // format provides a function to return a string parse by number format
@@ -296,7 +297,7 @@ func format(value, numFmt string) string {
 		if section.Type != nf.valueSectionType {
 			continue
 		}
-		if nf.isNumberic {
+		if nf.isNumeric {
 			switch section.Type {
 			case nfp.TokenSectionPositive:
 				return nf.positiveHandler()
@@ -334,6 +335,20 @@ func (nf *numberFormat) positiveHandler() (result string) {
 		if token.TType == nfp.TokenTypeLiteral {
 			nf.result += token.TValue
 			continue
+		}
+		if token.TType == nfp.TokenTypeZeroPlaceHolder && token.TValue == "0" {
+			if isNum, precision := isNumeric(nf.value); isNum {
+				if nf.number < 1 {
+					nf.result += "0"
+					continue
+				}
+				if precision > 15 {
+					nf.result += roundPrecision(nf.value, 15)
+				} else {
+					nf.result += fmt.Sprintf("%.f", nf.number)
+				}
+				continue
+			}
 		}
 	}
 	result = nf.result
@@ -443,7 +458,7 @@ func localMonthsNameIrish(t time.Time, abbr int) string {
 		}
 	}
 	if abbr == 4 {
-		return string([]rune(monthNamesIrish[int(t.Month())-1]))
+		return monthNamesIrish[int(t.Month())-1]
 	}
 	return string([]rune(monthNamesIrish[int(t.Month())-1])[:1])
 }
@@ -523,7 +538,7 @@ func localMonthsNameRussian(t time.Time, abbr int) string {
 		return string([]rune(month)[:3]) + "."
 	}
 	if abbr == 4 {
-		return string([]rune(monthNamesRussian[int(t.Month())-1]))
+		return monthNamesRussian[int(t.Month())-1]
 	}
 	return string([]rune(monthNamesRussian[int(t.Month())-1])[:1])
 }
@@ -546,7 +561,7 @@ func localMonthsNameThai(t time.Time, abbr int) string {
 		return string(r[:1]) + "." + string(r[len(r)-2:len(r)-1]) + "."
 	}
 	if abbr == 4 {
-		return string([]rune(monthNamesThai[int(t.Month())-1]))
+		return monthNamesThai[int(t.Month())-1]
 	}
 	return string([]rune(monthNamesThai[int(t.Month())-1])[:1])
 }
@@ -562,7 +577,7 @@ func localMonthsNameTibetan(t time.Time, abbr int) string {
 		}
 		return "\u0f5f"
 	}
-	return string(monthNamesTibetan[int(t.Month())-1])
+	return monthNamesTibetan[int(t.Month())-1]
 }
 
 // localMonthsNameTurkish returns the Turkish name of the month.
@@ -648,7 +663,7 @@ func localMonthsNameXhosa(t time.Time, abbr int) string {
 // localMonthsNameYi returns the Yi name of the month.
 func localMonthsNameYi(t time.Time, abbr int) string {
 	if abbr == 3 || abbr == 4 {
-		return string([]rune(monthNamesYi[int(t.Month())-1])) + "\ua1aa"
+		return string(monthNamesYi[int(t.Month())-1]) + "\ua1aa"
 	}
 	return string([]rune(monthNamesYi[int(t.Month())-1])[:1])
 }
@@ -876,8 +891,33 @@ func (nf *numberFormat) secondsNext(i int) bool {
 
 // negativeHandler will be handling negative selection for a number format
 // expression.
-func (nf *numberFormat) negativeHandler() string {
-	return nf.value
+func (nf *numberFormat) negativeHandler() (result string) {
+	for _, token := range nf.section[nf.sectionIdx].Items {
+		if inStrSlice(supportedTokenTypes, token.TType, true) == -1 || token.TType == nfp.TokenTypeGeneral {
+			result = nf.value
+			return
+		}
+		if token.TType == nfp.TokenTypeLiteral {
+			nf.result += token.TValue
+			continue
+		}
+		if token.TType == nfp.TokenTypeZeroPlaceHolder && token.TValue == "0" {
+			if isNum, precision := isNumeric(nf.value); isNum {
+				if math.Abs(nf.number) < 1 {
+					nf.result += "0"
+					continue
+				}
+				if precision > 15 {
+					nf.result += strings.TrimLeft(roundPrecision(nf.value, 15), "-")
+				} else {
+					nf.result += fmt.Sprintf("%.f", math.Abs(nf.number))
+				}
+				continue
+			}
+		}
+	}
+	result = nf.result
+	return
 }
 
 // zeroHandler will be handling zero selection for a number format expression.
